@@ -11,3 +11,4 @@ export default function StudentPanel() {
     </div>
   );
 }
+//client/src/Layout/StudentPanel.jsx
