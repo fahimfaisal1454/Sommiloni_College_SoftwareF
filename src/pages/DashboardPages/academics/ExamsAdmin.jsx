@@ -8,9 +8,9 @@ export default function ExamsAdmin() {
   const [years, setYears] = useState([]);
   const [classes, setClasses] = useState([]);
   const [form, setForm] = useState({
-    year: null,       // {value,label}
-    class_name: [],   // [{value,label}]
-    section: [],      // [{value,label,classId}]
+    year: null, // {value,label}
+    class_name: [], // [{value,label}]
+    section: [], // [{value,label,classId}]
     name: "",
   });
 
@@ -18,9 +18,15 @@ export default function ExamsAdmin() {
   const [creating, setCreating] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  // Edit modal
+  // Edit exam name modal
   const [editing, setEditing] = useState(null); // {id}
   const [editingName, setEditingName] = useState("");
+
+  // NEW: configure subject full-marks / components
+  const [configExam, setConfigExam] = useState(null); // full exam object
+  const [configRows, setConfigRows] = useState([]); // [{subjectId, subjectName, isPractical, isTheory, use_cq, use_mcq, use_practical, full_cq, full_mcq, full_practical}]
+  const [configLoading, setConfigLoading] = useState(false);
+  const [configSaving, setConfigSaving] = useState(false);
 
   /* --------------------- Fetch years --------------------- */
   useEffect(() => {
@@ -32,7 +38,9 @@ export default function ExamsAdmin() {
           : [];
         setYears(serverYears);
         if (serverYears.length) {
-          const latest = serverYears.slice().sort((a, b) => Number(b.value) - Number(a.value))[0];
+          const latest = serverYears
+            .slice()
+            .sort((a, b) => Number(b.value) - Number(a.value))[0];
           setForm((p) => ({ ...p, year: latest }));
         }
       } catch {
@@ -50,7 +58,9 @@ export default function ExamsAdmin() {
     }
     (async () => {
       try {
-        const { data } = await AxiosInstance.get("classes/", { params: { year: form.year.value } });
+        const { data } = await AxiosInstance.get("classes/", {
+          params: { year: form.year.value },
+        });
         setClasses(Array.isArray(data) ? data : data?.results || []);
       } catch {
         toast.error("Failed to load classes");
@@ -95,7 +105,7 @@ export default function ExamsAdmin() {
     const root = new Map();
     for (const cls of classes) {
       const m = new Map();
-      const secs = (cls.sections_detail || cls.sections || []);
+      const secs = cls.sections_detail || cls.sections || [];
       secs.forEach((s) => m.set(Number(s.id), s.name));
       root.set(Number(cls.id), m);
     }
@@ -112,7 +122,9 @@ export default function ExamsAdmin() {
     try {
       const collected = new Map();
       for (const cls of form.class_name) {
-        for (const sec of form.section.filter((s) => Number(s.classId) === Number(cls.value))) {
+        for (const sec of form.section.filter(
+          (s) => Number(s.classId) === Number(cls.value)
+        )) {
           const { data } = await AxiosInstance.get("exams/", {
             params: {
               class_name: Number(cls.value),
@@ -120,7 +132,9 @@ export default function ExamsAdmin() {
               year: form.year.value,
             },
           });
-          (Array.isArray(data) ? data : []).forEach((ex) => collected.set(ex.id, ex));
+          (Array.isArray(data) ? data : []).forEach((ex) =>
+            collected.set(ex.id, ex)
+          );
         }
       }
       setExams(Array.from(collected.values()));
@@ -131,7 +145,10 @@ export default function ExamsAdmin() {
       setLoading(false);
     }
   };
-  useEffect(() => { load(); }, [form.year, form.class_name, form.section]);
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.year, form.class_name, form.section]);
 
   /* --------------------- Create exams --------------------- */
   const createExam = async (e) => {
@@ -142,7 +159,9 @@ export default function ExamsAdmin() {
     }
     const pairs = [];
     for (const cls of form.class_name) {
-      for (const sec of form.section.filter((s) => Number(s.classId) === Number(cls.value))) {
+      for (const sec of form.section.filter(
+        (s) => Number(s.classId) === Number(cls.value)
+      )) {
         pairs.push({ class_name: Number(cls.value), section: Number(sec.value) });
       }
     }
@@ -150,7 +169,8 @@ export default function ExamsAdmin() {
 
     setCreating(true);
     try {
-      let ok = 0, fail = 0;
+      let ok = 0,
+        fail = 0;
       for (const p of pairs) {
         try {
           await AxiosInstance.post("exams/", {
@@ -173,7 +193,7 @@ export default function ExamsAdmin() {
     }
   };
 
-  /* --------------------- Actions --------------------- */
+  /* --------------------- Exam actions --------------------- */
   const togglePublish = async (ex) => {
     try {
       await AxiosInstance.patch(`exams/${ex.id}/`, { is_published: !ex.is_published });
@@ -214,6 +234,205 @@ export default function ExamsAdmin() {
     }
   };
 
+  /* --------------------- NEW: Configure subject marks --------------------- */
+
+  const computeDefaultConfig = (exam, subject, existing) => {
+    // If we already have config from backend, just map it.
+    if (existing) {
+      return {
+        use_cq: existing.full_cq > 0,
+        use_mcq: existing.full_mcq > 0,
+        use_practical: existing.full_practical > 0,
+        full_cq: existing.full_cq ? String(existing.full_cq) : "",
+        full_mcq: existing.full_mcq ? String(existing.full_mcq) : "",
+        full_practical: existing.full_practical ? String(existing.full_practical) : "",
+      };
+    }
+
+    const exName = String(exam?.name || "").toLowerCase();
+    const isHalf = exName.includes("half");
+    const isFinal = exName.includes("final") || exName.includes("annual");
+    const hasPractical = !!subject.is_practical;
+
+    let use_cq = true;
+    let use_mcq = false;
+    let use_practical = false;
+    let full_cq = "";
+    let full_mcq = "";
+    let full_practical = "";
+
+    if (isHalf) {
+      // Half-yearly patterns (total 50)
+      if (hasPractical) {
+        // e.g. ICT / Economics / Geography — 30 CQ + 20 MCQ
+        use_cq = true;
+        use_mcq = true;
+        use_practical = false;
+        full_cq = "30";
+        full_mcq = "20";
+      } else {
+        // Bangla / English etc: 50 total theory (all CQ by default)
+        use_cq = true;
+        use_mcq = false;
+        use_practical = false;
+        full_cq = "50";
+      }
+    } else if (isFinal) {
+      // Year final patterns (total 100)
+      if (hasPractical) {
+        // e.g. ICT with practical: 50 CQ + 25 MCQ + 25 Practical
+        use_cq = true;
+        use_mcq = true;
+        use_practical = true;
+        full_cq = "50";
+        full_mcq = "25";
+        full_practical = "25";
+      } else {
+        // English / Bangla 1st / 2nd etc: 70 CQ + 30 MCQ
+        use_cq = true;
+        use_mcq = true;
+        use_practical = false;
+        full_cq = "70";
+        full_mcq = "30";
+      }
+    } else {
+      // Fallback: 100 total, theory only; if practical subject then 75+25
+      if (hasPractical) {
+        use_cq = true;
+        use_mcq = false;
+        use_practical = true;
+        full_cq = "75";
+        full_practical = "25";
+      } else {
+        use_cq = true;
+        use_mcq = false;
+        use_practical = false;
+        full_cq = "100";
+      }
+    }
+
+    return { use_cq, use_mcq, use_practical, full_cq, full_mcq, full_practical };
+  };
+
+  const openConfig = async (ex) => {
+    setConfigExam(ex);
+    setConfigRows([]);
+    setConfigLoading(true);
+    try {
+      const classId = Number(ex.class_name?.id ?? ex.class_name);
+      if (!classId) {
+        throw new Error("Exam has no class_name id");
+      }
+
+      // 1) Load subjects for this class
+      const subRes = await AxiosInstance.get("subjects/", {
+        params: { class_id: classId },
+      });
+      const subjects = Array.isArray(subRes.data)
+        ? subRes.data
+        : subRes.data?.results || [];
+
+      // 2) Load existing config for this exam (if backend already has it)
+      let existing = [];
+      try {
+        const cfgRes = await AxiosInstance.get("exam-subject-configs/", {
+          params: { exam: ex.id },
+        });
+        existing = Array.isArray(cfgRes.data)
+          ? cfgRes.data
+          : cfgRes.data?.results || [];
+      } catch (err) {
+        // If endpoint not yet implemented, just continue with defaults
+        console.warn("exam-subject-configs GET failed (using defaults):", err);
+      }
+      const bySubject = new Map();
+      existing.forEach((c) => {
+        const sid = Number(c.subject?.id ?? c.subject);
+        if (sid) bySubject.set(sid, c);
+      });
+
+      const rows = subjects.map((s) => {
+        const sid = Number(s.id);
+        const base = computeDefaultConfig(ex, s, bySubject.get(sid));
+        return {
+          subjectId: sid,
+          subjectName: s.name,
+          isPractical: !!s.is_practical,
+          isTheory: !!s.is_theory,
+          ...base,
+        };
+      });
+
+      // sort by subject name
+      rows.sort((a, b) => a.subjectName.localeCompare(b.subjectName));
+      setConfigRows(rows);
+    } catch (e) {
+      console.error(e);
+      toast.error("Failed to load subjects / marks setup.");
+      setConfigExam(null);
+      setConfigRows([]);
+    } finally {
+      setConfigLoading(false);
+    }
+  };
+
+  const closeConfig = () => {
+    setConfigExam(null);
+    setConfigRows([]);
+  };
+
+  const updateConfigRow = (subjectId, patch) => {
+    setConfigRows((rows) =>
+      rows.map((r) =>
+        r.subjectId === subjectId
+          ? {
+              ...r,
+              ...patch,
+            }
+          : r
+      )
+    );
+  };
+
+  const totalForRow = (r) => {
+    const cq = r.use_cq ? Number(r.full_cq || 0) : 0;
+    const mcq = r.use_mcq ? Number(r.full_mcq || 0) : 0;
+    const prac = r.use_practical ? Number(r.full_practical || 0) : 0;
+    return cq + mcq + prac;
+  };
+
+  const saveConfig = async () => {
+    if (!configExam) return;
+    setConfigSaving(true);
+    try {
+      const items = configRows
+        .filter((r) => r.use_cq || r.use_mcq || r.use_practical)
+        .map((r) => ({
+          exam: configExam.id,
+          subject: r.subjectId,
+          full_cq: r.use_cq ? Number(r.full_cq || 0) : 0,
+          full_mcq: r.use_mcq ? Number(r.full_mcq || 0) : 0,
+          full_practical: r.use_practical ? Number(r.full_practical || 0) : 0,
+        }));
+
+      // Expectation: backend view handles bulk upsert for an exam
+      // POST body: { exam: <exam_id>, items: [...] }
+      await AxiosInstance.post("exam-subject-configs/bulk-upsert/", {
+        exam: configExam.id,
+        items,
+      });
+
+      toast.success("Subject marks setup saved");
+      closeConfig();
+    } catch (e) {
+      console.error(e);
+      const msg = e?.response?.data?.detail || "Saving marks setup failed";
+      toast.error(typeof msg === "string" ? msg : "Saving marks setup failed");
+    } finally {
+      setConfigSaving(false);
+    }
+  };
+
   /* --------------------- Grouping & labels --------------------- */
   // year -> classKey -> sectionKey -> [exams]
   const grouped = useMemo(() => {
@@ -234,7 +453,10 @@ export default function ExamsAdmin() {
   }, [exams]);
 
   const yearsSorted = useMemo(
-    () => Array.from(grouped.keys()).sort((a, b) => String(b).localeCompare(String(a))),
+    () =>
+      Array.from(grouped.keys()).sort((a, b) =>
+        String(b).localeCompare(String(a))
+      ),
     [grouped]
   );
 
@@ -257,7 +479,10 @@ export default function ExamsAdmin() {
       <h1 className="text-xl font-bold">Exams (Admin)</h1>
 
       {/* Create form */}
-      <form onSubmit={createExam} className="bg-white border p-4 rounded-md space-y-3">
+      <form
+        onSubmit={createExam}
+        className="bg-white border p-4 rounded-md space-y-3"
+      >
         <div className="grid md:grid-cols-5 gap-3">
           <div>
             <label className="text-sm font-semibold">Year</label>
@@ -277,7 +502,9 @@ export default function ExamsAdmin() {
               isMulti
               options={classOptions}
               value={form.class_name}
-              onChange={(val) => setForm((p) => ({ ...p, class_name: val, section: [] }))}
+              onChange={(val) =>
+                setForm((p) => ({ ...p, class_name: val, section: [] }))
+              }
               isDisabled={!form.year}
               placeholder="Select classes"
             />
@@ -299,14 +526,19 @@ export default function ExamsAdmin() {
             <label className="text-sm font-semibold">Exam name</label>
             <input
               className="w-full border rounded px-2 py-1"
-              placeholder="e.g., 1st term / Annual 2025"
+              placeholder="e.g., Half Yearly / Year Final"
               value={form.name}
-              onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
+              onChange={(e) =>
+                setForm((p) => ({ ...p, name: e.target.value }))
+              }
             />
           </div>
         </div>
 
-        <button className="bg-[#2c8e3f] text-white rounded px-3 py-1" disabled={creating}>
+        <button
+          className="bg-[#2c8e3f] text-white rounded px-3 py-1"
+          disabled={creating}
+        >
           {creating ? "Creating..." : "Create Exam(s)"}
         </button>
       </form>
@@ -326,14 +558,21 @@ export default function ExamsAdmin() {
               const classMap = grouped.get(yr);
               const classIds = Array.from(classMap.keys());
               const total = Array.from(classMap.values()).reduce(
-                (acc, m) => acc + Array.from(m.values()).reduce((a, arr) => a + arr.length, 0),
+                (acc, m) =>
+                  acc +
+                  Array.from(m.values()).reduce(
+                    (a, arr) => a + arr.length,
+                    0
+                  ),
                 0
               );
 
               return (
                 <section key={yr} className="space-y-3">
                   <div className="flex items-center gap-2">
-                    <h3 className="text-sm font-semibold text-gray-700">Year {yr}</h3>
+                    <h3 className="text-sm font-semibold text-gray-700">
+                      Year {yr}
+                    </h3>
                     <span className="text-[10px] text-gray-500">
                       {total} exam{total > 1 ? "s" : ""}
                     </span>
@@ -346,11 +585,15 @@ export default function ExamsAdmin() {
                     const classText = labelClass(sample?.class_name ?? cid);
 
                     return (
-                      <div key={`${yr}-${cid}`} className="rounded-lg border bg-gray-50">
+                      <div
+                        key={`${yr}-${cid}`}
+                        className="rounded-lg border bg-gray-50"
+                      >
                         <div className="px-3 py-2 border-b flex items-center justify-between">
                           <div className="text-sm font-medium">{classText}</div>
                           <span className="text-xs text-gray-500">
-                            {allForClass.length} item{allForClass.length > 1 ? "s" : ""}
+                            {allForClass.length} item
+                            {allForClass.length > 1 ? "s" : ""}
                           </span>
                         </div>
 
@@ -358,31 +601,44 @@ export default function ExamsAdmin() {
                           {Array.from(bySection.keys()).map((sid) => {
                             const list = bySection.get(sid);
                             const sampleSec = list[0];
-                            const secText = labelSection(cid, sampleSec?.section ?? sid);
+                            const secText = labelSection(
+                              cid,
+                              sampleSec?.section ?? sid
+                            );
 
                             return (
-                              <div key={`${yr}-${cid}-${sid}`} className="rounded-md border bg-white">
+                              <div
+                                key={`${yr}-${cid}-${sid}`}
+                                className="rounded-md border bg-white"
+                              >
                                 <div className="px-3 py-2 border-b flex items-center justify-between">
                                   <div className="text-xs font-semibold text-gray-700">
                                     {secText}
                                   </div>
                                   <span className="text-[10px] text-gray-500">
-                                    {list.length} exam{list.length > 1 ? "s" : ""}
+                                    {list.length} exam
+                                    {list.length > 1 ? "s" : ""}
                                   </span>
                                 </div>
 
                                 <ul className="divide-y">
                                   {list
                                     .slice()
-                                    .sort((a, b) => String(a.name).localeCompare(String(b.name)))
+                                    .sort((a, b) =>
+                                      String(a.name).localeCompare(String(b.name))
+                                    )
                                     .map((ex) => (
                                       <li
                                         key={ex.id}
                                         className="px-3 py-2 flex items-center justify-between"
                                       >
                                         <div className="min-w-0">
-                                          <div className="truncate text-sm font-medium">{ex.name}</div>
-                                          <div className="text-[11px] text-gray-500">ID: {ex.id}</div>
+                                          <div className="truncate text-sm font-medium">
+                                            {ex.name}
+                                          </div>
+                                          <div className="text-[11px] text-gray-500">
+                                            ID: {ex.id}
+                                          </div>
                                           <span
                                             className={`mt-1 inline-block text-[10px] px-2 py-0.5 rounded border ${
                                               ex.is_published
@@ -390,17 +646,32 @@ export default function ExamsAdmin() {
                                                 : "bg-gray-50 text-gray-600 border-gray-200"
                                             }`}
                                           >
-                                            {ex.is_published ? "Published" : "Draft"}
+                                            {ex.is_published
+                                              ? "Published"
+                                              : "Draft"}
                                           </span>
                                         </div>
 
                                         <div className="flex items-center gap-2 shrink-0">
                                           <button
+                                            onClick={() => openConfig(ex)}
+                                            className="text-xs px-2 py-1 rounded border hover:bg-gray-50"
+                                            title="Configure subject marks (CQ / MCQ / Practical)"
+                                          >
+                                            Configure marks
+                                          </button>
+                                          <button
                                             onClick={() => togglePublish(ex)}
                                             className="text-xs px-2 py-1 rounded border hover:bg-gray-50"
-                                            title={ex.is_published ? "Unpublish" : "Publish"}
+                                            title={
+                                              ex.is_published
+                                                ? "Unpublish"
+                                                : "Publish"
+                                            }
                                           >
-                                            {ex.is_published ? "Unpublish" : "Publish"}
+                                            {ex.is_published
+                                              ? "Unpublish"
+                                              : "Publish"}
                                           </button>
                                           <button
                                             onClick={() => openEdit(ex)}
@@ -434,28 +705,36 @@ export default function ExamsAdmin() {
         )}
       </div>
 
-      {/* Edit modal */}
+      {/* Edit exam name modal */}
       {editing && (
         <div className="fixed inset-0 bg-black/40 grid place-items-center z-50">
           <div className="bg-white rounded-2xl w-[94%] max-w-md shadow-xl border">
             <div className="px-5 py-3 border-b flex items-center justify-between">
               <h3 className="text-base font-semibold">Edit Exam</h3>
-              <button onClick={() => setEditing(null)} className="text-slate-500 hover:text-slate-800">
+              <button
+                onClick={() => setEditing(null)}
+                className="text-slate-500 hover:text-slate-800"
+              >
                 ✕
               </button>
             </div>
             <div className="px-5 py-4 space-y-3">
               <div>
-                <label className="text-sm font-medium text-slate-700 mb-1">Name</label>
+                <label className="text-sm font-medium text-slate-700 mb-1">
+                  Name
+                </label>
                 <input
                   className="w-full border rounded px-3 py-2"
                   value={editingName}
                   onChange={(e) => setEditingName(e.target.value)}
-                  placeholder="e.g., 1st term"
+                  placeholder="e.g., Half Yearly 2025"
                 />
               </div>
               <div className="flex gap-2 justify-end">
-                <button onClick={() => setEditing(null)} className="px-3 py-1.5 rounded border">
+                <button
+                  onClick={() => setEditing(null)}
+                  className="px-3 py-1.5 rounded border"
+                >
                   Cancel
                 </button>
                 <button
@@ -466,6 +745,183 @@ export default function ExamsAdmin() {
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* NEW: Configure subject marks modal */}
+      {configExam && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center">
+          <div className="bg-white rounded-2xl shadow-xl border w-[96%] max-w-4xl max-h-[90vh] flex flex-col">
+            <div className="px-4 py-3 border-b flex items-center justify-between">
+              <div className="flex flex-col">
+                <span className="text-base font-semibold">
+                  Configure subject marks
+                </span>
+                <span className="text-xs text-slate-500">
+                  Exam: <b>{configExam.name}</b>
+                </span>
+              </div>
+              <button
+                onClick={closeConfig}
+                className="px-2 py-1 text-sm border rounded hover:bg-slate-50"
+              >
+                ✕ Close
+              </button>
+            </div>
+
+            {configLoading ? (
+              <div className="p-4 text-sm">Loading subjects…</div>
+            ) : configRows.length === 0 ? (
+              <div className="p-4 text-sm text-slate-600">
+                No subjects found for this class.
+              </div>
+            ) : (
+              <>
+                <div className="px-4 py-2 text-xs text-slate-500">
+                  Tick which parts apply (CQ / MCQ / Practical) and set full
+                  marks for each subject. Total will be calculated automatically.
+                  Defaults are guessed from the exam name (Half yearly / Year
+                  final) and whether the subject has practical.
+                </div>
+                <div className="flex-1 overflow-auto">
+                  <table className="w-full text-xs border-collapse">
+                    <thead className="bg-slate-100">
+                      <tr>
+                        <th className="border px-2 py-1 text-left">Subject</th>
+                        <th className="border px-2 py-1 text-center">CQ?</th>
+                        <th className="border px-2 py-1 text-center">CQ Marks</th>
+                        <th className="border px-2 py-1 text-center">MCQ?</th>
+                        <th className="border px-2 py-1 text-center">
+                          MCQ Marks
+                        </th>
+                        <th className="border px-2 py-1 text-center">
+                          Practical?
+                        </th>
+                        <th className="border px-2 py-1 text-center">
+                          Practical Marks
+                        </th>
+                        <th className="border px-2 py-1 text-center">Total</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {configRows.map((r) => (
+                        <tr key={r.subjectId} className="border-t">
+                          <td className="border px-2 py-1">
+                            <div className="font-medium text-[11px]">
+                              {r.subjectName}
+                            </div>
+                            <div className="text-[10px] text-slate-500">
+                              {r.isPractical
+                                ? "Has practical"
+                                : r.isTheory
+                                ? "Theory"
+                                : ""}
+                            </div>
+                          </td>
+                          <td className="border px-2 py-1 text-center">
+                            <input
+                              type="checkbox"
+                              checked={r.use_cq}
+                              onChange={(e) =>
+                                updateConfigRow(r.subjectId, {
+                                  use_cq: e.target.checked,
+                                })
+                              }
+                            />
+                          </td>
+                          <td className="border px-2 py-1 text-center">
+                            <input
+                              type="number"
+                              min={0}
+                              className="w-20 border rounded px-1 py-0.5 text-xs"
+                              value={r.full_cq}
+                              onChange={(e) =>
+                                updateConfigRow(r.subjectId, {
+                                  full_cq: e.target.value,
+                                })
+                              }
+                              disabled={!r.use_cq}
+                            />
+                          </td>
+                          <td className="border px-2 py-1 text-center">
+                            <input
+                              type="checkbox"
+                              checked={r.use_mcq}
+                              onChange={(e) =>
+                                updateConfigRow(r.subjectId, {
+                                  use_mcq: e.target.checked,
+                                })
+                              }
+                            />
+                          </td>
+                          <td className="border px-2 py-1 text-center">
+                            <input
+                              type="number"
+                              min={0}
+                              className="w-20 border rounded px-1 py-0.5 text-xs"
+                              value={r.full_mcq}
+                              onChange={(e) =>
+                                updateConfigRow(r.subjectId, {
+                                  full_mcq: e.target.value,
+                                })
+                              }
+                              disabled={!r.use_mcq}
+                            />
+                          </td>
+                          <td className="border px-2 py-1 text-center">
+                            <input
+                              type="checkbox"
+                              checked={r.use_practical}
+                              onChange={(e) =>
+                                updateConfigRow(r.subjectId, {
+                                  use_practical: e.target.checked,
+                                })
+                              }
+                            />
+                          </td>
+                          <td className="border px-2 py-1 text-center">
+                            <input
+                              type="number"
+                              min={0}
+                              className="w-20 border rounded px-1 py-0.5 text-xs"
+                              value={r.full_practical}
+                              onChange={(e) =>
+                                updateConfigRow(r.subjectId, {
+                                  full_practical: e.target.value,
+                                })
+                              }
+                              disabled={!r.use_practical}
+                            />
+                          </td>
+                          <td className="border px-2 py-1 text-center text-[11px] font-semibold">
+                            {totalForRow(r)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="px-4 py-3 border-t flex justify-end gap-2">
+                  <button
+                    onClick={closeConfig}
+                    className="px-3 py-1.5 rounded border text-xs"
+                    type="button"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={saveConfig}
+                    className="px-3 py-1.5 rounded bg-emerald-600 text-white hover:bg-emerald-700 text-xs"
+                    disabled={configSaving}
+                    type="button"
+                  >
+                    {configSaving ? "Saving…" : "Save setup"}
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

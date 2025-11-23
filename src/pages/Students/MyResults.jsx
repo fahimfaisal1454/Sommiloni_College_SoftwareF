@@ -25,21 +25,6 @@ function letterFromGPA(gpa, scale) {
   return "F";
 }
 
-const GRAND_ID = "__grand__";
-
-/** Map an exam object to the required weight.
- *  1st = 0.25, 2nd = 0.25, Final = 0.50 (case/wording tolerant).
- *  If name doesn't match, default to 0 (ignored).
- */
-function weightForExam(exam) {
-  const name = String(exam?.name || "").toLowerCase().trim();
-  if (!name) return 0;
-  if (name.includes("final")) return 0.50;
-  if (name.includes("2") || name.includes("second") || name.includes("2nd")) return 0.25;
-  if (name.includes("1") || name.includes("first") || name.includes("1st")) return 0.25;
-  return 0; // unknown terms won't affect the weighted total
-}
-
 /* ---------------- Component ---------------- */
 export default function StudentResults() {
   const [loadingBoot, setLoadingBoot] = useState(true);
@@ -178,60 +163,17 @@ export default function StudentResults() {
     return map;
   };
 
-  /* ---------- Load marks when selection changes ---------- */
+  /* ---------- Load marks when selection changes (single exam only) ---------- */
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      if ((!examId && examId !== GRAND_ID) || !studentId || subjects.length === 0) {
+      if (!examId || !studentId || subjects.length === 0) {
         setMarks({});
         return;
       }
       setLoadingMarks(true);
 
       try {
-        // GRAND TOTAL (weighted: 1st 25% + 2nd 25% + Final 50%)
-        if (examId === GRAND_ID) {
-          // Only include exams that have a defined weight
-          const weightedExams = exams
-            .map((ex) => ({ ex, w: weightForExam(ex) }))
-            .filter(({ w }) => w > 0);
-
-          const perExam = await Promise.all(
-            weightedExams.map(async ({ ex, w }) => ({
-              w,
-              map: await fetchMarksForExam(ex.id),
-            }))
-          );
-
-          // combine -> per subject weighted average across available marks
-          const combined = {};
-          for (const s of subjects) {
-            let wSum = 0;
-            let scoreSum = 0;
-            let gpaSum = 0;
-            for (const item of perExam) {
-              const m = item.map[s.id];
-              if (m && m.score != null) {
-                scoreSum += Number(m.score || 0) * item.w;
-                gpaSum += Number(m.gpa || 0) * item.w;
-                wSum += item.w;
-              }
-            }
-            if (wSum > 0) {
-              const wScore = scoreSum / wSum;
-              const wGpa = gpaSum / wSum;
-              combined[s.id] = {
-                score: wScore,
-                gpa: wGpa,
-                letter: letterFromGPA(wGpa, gradeScale),
-              };
-            }
-          }
-          if (!cancelled) setMarks(combined);
-          return;
-        }
-
-        // Single exam
         const single = await fetchMarksForExam(examId);
         if (!cancelled) setMarks(single);
       } finally {
@@ -241,11 +183,10 @@ export default function StudentResults() {
     return () => {
       cancelled = true;
     };
-  }, [examId, studentId, subjects, exams, gradeScale]);
+  }, [examId, studentId, subjects, exams]);
 
-  /* ---------- Current exam name (handles grand) ---------- */
+  /* ---------- Current exam name ---------- */
   const currentExamName = useMemo(() => {
-    if (examId === GRAND_ID) return "Grand total (25% + 25% + 50%)";
     return exams.find((e) => String(e.id) === String(examId))?.name || "";
   }, [exams, examId]);
 
@@ -261,14 +202,7 @@ export default function StudentResults() {
 
   /* ---------- Downloads ---------- */
   const onDownloadCsv = () => {
-    const headers = [
-      "#",
-      "Subject",
-      examId === GRAND_ID ? "Weighted Score" : "Score",
-      "Letter",
-      examId === GRAND_ID ? "Weighted GPA" : "GPA",
-      "Status",
-    ];
+    const headers = ["#", "Subject", "Score", "Letter", "GPA", "Status"];
     const rows = subjects.map((s, i) => {
       const m = marks[s.id];
       const has = !!m && (m.score !== null && m.score !== undefined);
@@ -312,7 +246,9 @@ export default function StudentResults() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `results_${currentExamName.replace(/\s+/g, "_")}_${className || "class"}_${sectionName || "section"}.csv`;
+    a.download = `results_${currentExamName.replace(/\s+/g, "_")}_${className || "class"}_${
+      sectionName || "section"
+    }.csv`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -344,14 +280,11 @@ export default function StudentResults() {
             {!exams.length ? (
               <option value="">No exams available</option>
             ) : (
-              <>
-                {exams.map((ex) => (
-                  <option key={ex.id} value={ex.id}>
-                    {ex.name}
-                  </option>
-                ))}
-                <option value={GRAND_ID}>Grand total (25% + 25% + 50%)</option>
-              </>
+              exams.map((ex) => (
+                <option key={ex.id} value={ex.id}>
+                  {ex.name}
+                </option>
+              ))
             )}
           </select>
         </div>
@@ -380,9 +313,7 @@ export default function StudentResults() {
         <div className="px-4 py-3 border-b bg-slate-50">
           <div className="text-sm font-semibold">{currentExamName || "Results"}</div>
           <div className="text-xs text-slate-500">
-            {examId === GRAND_ID
-              ? "Weighted CGPA uses: 1st term 25% + 2nd term 25% + Final term 50%."
-              : "Only published exam results are visible."}
+            Only published exam results are visible.
           </div>
         </div>
 
@@ -391,13 +322,9 @@ export default function StudentResults() {
             <tr className="text-left text-sm text-slate-700">
               <th className="w-14 px-3 py-2 border">#</th>
               <th className="px-3 py-2 border">Subject</th>
-              <th className="w-36 px-3 py-2 border text-right">
-                {examId === GRAND_ID ? "Weighted Score" : "Score"}
-              </th>
+              <th className="w-36 px-3 py-2 border text-right">Score</th>
               <th className="w-28 px-3 py-2 border text-center">Letter</th>
-              <th className="w-28 px-3 py-2 border text-center">
-                {examId === GRAND_ID ? "Weighted GPA" : "GPA"}
-              </th>
+              <th className="w-28 px-3 py-2 border text-center">GPA</th>
               <th className="w-32 px-3 py-2 border text-center">Status</th>
             </tr>
           </thead>
@@ -432,7 +359,9 @@ export default function StudentResults() {
                     <td className="px-3 py-2 border text-right">
                       {has ? Number(m.score).toFixed(2) : "—"}
                     </td>
-                    <td className="px-3 py-2 border text-center">{has ? m.letter || "—" : "—"}</td>
+                    <td className="px-3 py-2 border text-center">
+                      {has ? m.letter || "—" : "—"}
+                    </td>
                     <td className="px-3 py-2 border text-center">
                       {has && m.gpa != null ? Number(m.gpa).toFixed(2) : "—"}
                     </td>
@@ -456,7 +385,9 @@ export default function StudentResults() {
           {totals && (
             <tfoot>
               <tr className="bg-slate-50 font-semibold">
-                <td className="px-3 py-2 border" colSpan={2}>Total</td>
+                <td className="px-3 py-2 border" colSpan={2}>
+                  Total
+                </td>
                 <td className="px-3 py-2 border text-right">
                   {Number(totals.totalScore).toFixed(2)}
                 </td>
@@ -470,7 +401,8 @@ export default function StudentResults() {
               </tr>
               <tr>
                 <td colSpan={6} className="px-3 py-2 text-xs text-slate-500 border">
-                  Averages are based on {totals.count} subject{totals.count > 1 ? "s" : ""} with available marks.
+                  Averages are based on {totals.count} subject
+                  {totals.count > 1 ? "s" : ""} with available marks.
                 </td>
               </tr>
             </tfoot>

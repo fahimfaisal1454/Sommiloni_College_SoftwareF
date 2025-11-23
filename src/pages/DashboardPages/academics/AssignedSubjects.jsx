@@ -1,3 +1,4 @@
+// src/pages/admin/AssignedSubjects.jsx
 import { useEffect, useMemo, useState } from "react";
 import Select from "react-select";
 import { Toaster, toast } from "react-hot-toast";
@@ -97,16 +98,29 @@ export default function AssignedSubjects() {
     // prefer sections_detail (objects), else build from sections ids if present
     const details = currentClass.sections_detail || currentClass.sections || [];
     return details.map((s) =>
-      typeof s === "object" ? { value: s.id, label: s.name } : { value: s, label: String(s) }
+      typeof s === "object"
+        ? { value: s.id, label: s.name }
+        : { value: s, label: String(s) }
     );
   }, [currentClass]);
 
+  // FIX: show Theory / Practical / Theory + Practical correctly
   const subjectOptions = useMemo(
     () =>
-      (subjects || []).map((s) => ({
-        value: s.id,
-        label: s.name + (s.is_practical ? " (Practical)" : s.is_theory ? " (Theory)" : ""),
-      })),
+      (subjects || []).map((s) => {
+        let typeSuffix = "";
+        if (s.is_theory && s.is_practical) {
+          typeSuffix = " (Theory + Practical)";
+        } else if (s.is_practical) {
+          typeSuffix = " (Practical)";
+        } else if (s.is_theory) {
+          typeSuffix = " (Theory)";
+        }
+        return {
+          value: s.id,
+          label: s.name + typeSuffix,
+        };
+      }),
     [subjects]
   );
 
@@ -161,7 +175,9 @@ export default function AssignedSubjects() {
         bySub[key].isTheory = !!s.is_theory;
       }
     }
-    return Object.values(bySub).sort((a, b) => a.subjectName.localeCompare(b.subjectName));
+    return Object.values(bySub).sort((a, b) =>
+      a.subjectName.localeCompare(b.subjectName)
+    );
   }, [assignments, subjects]);
 
   // ------------- Edit modal -------------
@@ -174,7 +190,9 @@ export default function AssignedSubjects() {
       .filter(Boolean);
 
     setEditSubjectId(subjectId);
-    setEditSubjectName(subjects.find((s) => s.id === subjectId)?.name || "Subject");
+    setEditSubjectName(
+      subjects.find((s) => s.id === subjectId)?.name || "Subject"
+    );
     setEditSections(initial);
     setIsEditOpen(true);
   };
@@ -201,7 +219,9 @@ export default function AssignedSubjects() {
   const removeAllForSubject = async (subjectId) => {
     if (!window.confirm("Remove this subject from all sections?")) return;
     try {
-      const toRemove = assignments.filter((a) => a.subject === subjectId).map((a) => a.id);
+      const toRemove = assignments
+        .filter((a) => a.subject === subjectId)
+        .map((a) => a.id);
       for (const id of toRemove) {
         await AxiosInstance.delete(`class-subjects/${id}/`);
       }
@@ -219,7 +239,9 @@ export default function AssignedSubjects() {
 
       {/* ------------ Assign panel ------------ */}
       <div className="bg-white rounded shadow p-4 mb-6">
-        <h2 className="text-xl font-semibold mb-4">Assign Subjects to Class Sections</h2>
+        <h2 className="text-xl font-semibold mb-4">
+          Assign Subjects to Class Sections
+        </h2>
 
         <div className="grid md:grid-cols-4 gap-3">
           {/* NEW: Year */}
@@ -228,8 +250,14 @@ export default function AssignedSubjects() {
             <Select
               isClearable
               options={yearOptions}
-              value={yearOptions.find((o) => Number(o.value) === Number(selectedYear)) || null}
-              onChange={(opt) => setSelectedYear(opt ? Number(opt.value) : null)}
+              value={
+                yearOptions.find(
+                  (o) => Number(o.value) === Number(selectedYear)
+                ) || null
+              }
+              onChange={(opt) =>
+                setSelectedYear(opt ? Number(opt.value) : null)
+              }
               placeholder="All years"
             />
           </div>
@@ -289,7 +317,9 @@ export default function AssignedSubjects() {
         </h3>
 
         {!selectedClass ? (
-          <div className="text-slate-500">Select a class to view assignments.</div>
+          <div className="text-slate-500">
+            Select a class to view assignments.
+          </div>
         ) : grouped.length === 0 ? (
           <div className="text-slate-500">No assignments yet.</div>
         ) : (
@@ -308,7 +338,13 @@ export default function AssignedSubjects() {
                   <tr key={g.subjectId} className="border-t">
                     <td className="px-3 py-2">{g.subjectName}</td>
                     <td className="px-3 py-2">
-                      {g.isPractical ? "Practical" : g.isTheory ? "Theory" : "—"}
+                      {g.isTheory && g.isPractical
+                        ? "Theory & Practical"
+                        : g.isPractical
+                        ? "Practical"
+                        : g.isTheory
+                        ? "Theory"
+                        : "—"}
                     </td>
                     <td className="px-3 py-2">
                       <div className="flex flex-wrap">
@@ -345,7 +381,8 @@ export default function AssignedSubjects() {
           <div className="bg-white rounded-lg shadow-xl w-full max-w-lg">
             <div className="p-6">
               <h2 className="text-lg font-semibold mb-4">
-                Edit sections for <span className="text-blue-600">{editSubjectName}</span>
+                Edit sections for{" "}
+                <span className="text-blue-600">{editSubjectName}</span>
               </h2>
 
               <label className="block text-sm mb-1">Sections</label>
@@ -358,7 +395,10 @@ export default function AssignedSubjects() {
               />
 
               <div className="mt-5 flex justify-end gap-2">
-                <button onClick={() => setIsEditOpen(false)} className="px-4 py-2 rounded border">
+                <button
+                  onClick={() => setIsEditOpen(false)}
+                  className="px-4 py-2 rounded border"
+                >
                   Cancel
                 </button>
                 <button

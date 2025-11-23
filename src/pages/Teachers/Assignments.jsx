@@ -20,18 +20,18 @@ export default function TeacherAssignments() {
   });
 
   // Edit form
-  const [editing, setEditing] = useState(null);     // { id, title, instructions, due_date, fileUrl, _orig: {...} } | null
-  const [editFile, setEditFile] = useState(null);   // File | null
+  const [editing, setEditing] = useState(null); // { id, title, instructions, due_date, fileUrl, _orig: {...} } | null
+  const [editFile, setEditFile] = useState(null); // File | null
 
   // ---------------- Load data ----------------
   useEffect(() => {
     (async () => {
       try {
         let r = await AxiosInstance.get("timetable/", { params: { user: "me" } });
-        let rows = Array.isArray(r.data) ? r.data : (r.data?.results || []);
+        let rows = Array.isArray(r.data) ? r.data : r.data?.results || [];
         if (!rows.length) {
           r = await AxiosInstance.get("timetable/", { params: { teacher: "me" } });
-          rows = Array.isArray(r.data) ? r.data : (r.data?.results || []);
+          rows = Array.isArray(r.data) ? r.data : r.data?.results || [];
         }
         setTimetable(rows || []);
       } catch (e) {
@@ -44,12 +44,14 @@ export default function TeacherAssignments() {
   const loadMine = async () => {
     try {
       const r = await AxiosInstance.get("assignments/", { params: { teacher: "me" } });
-      setList(Array.isArray(r.data) ? r.data : (r.data?.results || []));
+      setList(Array.isArray(r.data) ? r.data : r.data?.results || []);
     } catch (e) {
       console.error("Assignments load failed:", e?.response?.data || e);
     }
   };
-  useEffect(() => { loadMine(); }, []);
+  useEffect(() => {
+    loadMine();
+  }, []);
 
   // ---------------- Helpers ----------------
   const toStr = (v) => (v === 0 ? "0" : v == null ? "" : String(v));
@@ -79,53 +81,88 @@ export default function TeacherAssignments() {
   };
 
   const rows = useMemo(() => {
-    const raw = Array.isArray(timetable) ? timetable : (timetable?.results || []);
-    return (raw || []).map((t) => {
-      const classId    = getId(t, ["class_id", "class_name_id", "class_name", "class"]);
-      const classLabel = getLabel(t, ["class_label", "class_name", "class"], classId);
+    const raw = Array.isArray(timetable) ? timetable : timetable?.results || [];
+    return (raw || [])
+      .map((t) => {
+        const classId = getId(t, ["class_id", "class_name_id", "class_name", "class"]);
+        // 🔧 FIX: include class_name_label so we see the human name instead of numeric ID
+        const classLabel = getLabel(
+          t,
+          ["class_name_label", "class_label", "class_name", "class"],
+          classId
+        );
 
-      const sectionId    = getId(t, ["section_id", "section"]);
-      const sectionLabel = getLabel(t, ["section_label", "section_name", "section"], sectionId);
+        const sectionId = getId(t, ["section_id", "section"]);
+        const sectionLabel = getLabel(
+          t,
+          ["section_label", "section_name", "section"],
+          sectionId
+        );
 
-      const subjectId    = getId(t, ["subject_id", "subject"]);
-      const subjectLabel = getLabel(t, ["subject_label", "subject_name", "subject"], subjectId);
+        const subjectId = getId(t, ["subject_id", "subject"]);
+        const subjectLabel = getLabel(
+          t,
+          ["subject_label", "subject_name", "subject"],
+          subjectId
+        );
 
-      return {
-        classId, classLabel, classKey: classId || classLabel,
-        sectionId, sectionLabel, sectionKey: sectionId || sectionLabel,
-        subjectId, subjectLabel, subjectKey: subjectId || subjectLabel,
-      };
-    })
-    .filter(r => r.classKey && r.sectionKey && r.subjectKey);
+        return {
+          classId,
+          classLabel,
+          classKey: classId || classLabel,
+          sectionId,
+          sectionLabel,
+          sectionKey: sectionId || sectionLabel,
+          subjectId,
+          subjectLabel,
+          subjectKey: subjectId || subjectLabel,
+        };
+      })
+      .filter((r) => r.classKey && r.sectionKey && r.subjectKey);
   }, [timetable]);
 
   const classOptions = useMemo(() => {
     const m = new Map();
-    rows.forEach(r => { if (!m.has(r.classKey)) m.set(r.classKey, { key: r.classKey, id: r.classId, label: r.classLabel }); });
+    rows.forEach((r) => {
+      if (!m.has(r.classKey))
+        m.set(r.classKey, { key: r.classKey, id: r.classId, label: r.classLabel });
+    });
     return [...m.values()];
   }, [rows]);
 
   const sectionOptions = useMemo(() => {
     if (!selected.classKey) return [];
     const m = new Map();
-    rows.filter(r => r.classKey === selected.classKey)
-        .forEach(r => { if (!m.has(r.sectionKey)) m.set(r.sectionKey, { key: r.sectionKey, id: r.sectionId, label: r.sectionLabel }); });
+    rows
+      .filter((r) => r.classKey === selected.classKey)
+      .forEach((r) => {
+        if (!m.has(r.sectionKey))
+          m.set(r.sectionKey, { key: r.sectionKey, id: r.sectionId, label: r.sectionLabel });
+      });
     return [...m.values()];
   }, [rows, selected.classKey]);
 
   const subjectOptions = useMemo(() => {
     if (!selected.classKey || !selected.sectionKey) return [];
     const m = new Map();
-    rows.filter(r => r.classKey === selected.classKey && r.sectionKey === selected.sectionKey)
-        .forEach(r => { if (!m.has(r.subjectKey)) m.set(r.subjectKey, { key: r.subjectKey, id: r.subjectId, label: r.subjectLabel }); });
+    rows
+      .filter(
+        (r) =>
+          r.classKey === selected.classKey && r.sectionKey === selected.sectionKey
+      )
+      .forEach((r) => {
+        if (!m.has(r.subjectKey))
+          m.set(r.subjectKey, { key: r.subjectKey, id: r.subjectId, label: r.subjectLabel });
+      });
     return [...m.values()];
   }, [rows, selected.classKey, selected.sectionKey]);
 
   const resolveSelection = () =>
-    rows.find(r =>
-      r.classKey === selected.classKey &&
-      r.sectionKey === selected.sectionKey &&
-      r.subjectKey === selected.subjectKey
+    rows.find(
+      (r) =>
+        r.classKey === selected.classKey &&
+        r.sectionKey === selected.sectionKey &&
+        r.subjectKey === selected.subjectKey
     ) || null;
 
   // ---------------- Create ----------------
@@ -150,25 +187,30 @@ export default function TeacherAssignments() {
     setSaving(true);
     try {
       const fd = new FormData();
-      fd.append("class_name", resolved.classId);   // numeric IDs only
-      fd.append("section",    resolved.sectionId);
-      fd.append("subject",    resolved.subjectId);
+      fd.append("class_name", resolved.classId); // numeric IDs only
+      fd.append("section", resolved.sectionId);
+      fd.append("subject", resolved.subjectId);
       fd.append("title", selected.title);
-      // instructions is optional but we send it when present (can be empty string too)
       fd.append("instructions", selected.instructions || "");
       if (selected.due_date) fd.append("due_date", selected.due_date);
-      // file is optional (PDF or image)
       if (file) fd.append("file", file);
 
       await AxiosInstance.post("assignments/", fd);
       toast.success("Assignment created");
 
-      setSelected({ classKey: "", sectionKey: "", subjectKey: "", title: "", instructions: "", due_date: "" });
+      setSelected({
+        classKey: "",
+        sectionKey: "",
+        subjectKey: "",
+        title: "",
+        instructions: "",
+        due_date: "",
+      });
       setFile(null);
       await loadMine();
-    } catch (e) {
-      console.error("Create failed:", e?.response?.data || e);
-      const msg = e?.response?.data?.detail || "Create failed";
+    } catch (e2) {
+      console.error("Create failed:", e2?.response?.data || e2);
+      const msg = e2?.response?.data?.detail || "Create failed";
       toast.error(msg);
     } finally {
       setSaving(false);
@@ -191,10 +233,9 @@ export default function TeacherAssignments() {
 
   // ---------------- Edit ----------------
   const openEdit = (a) => {
-    // Make sure we keep the original so we can avoid sending unchanged fields if you want.
     const orig = {
       title: a.title || "",
-      instructions: a.instructions ?? "",   // ensure we capture it even if empty
+      instructions: a.instructions ?? "",
       due_date: a.due_date || "",
       fileUrl: a.file || "",
     };
@@ -209,17 +250,11 @@ export default function TeacherAssignments() {
 
     setSaving(true);
     try {
-      // PATCH multipart
       const fd = new FormData();
-
-      // Always send these three fields (they're safe to update)
       fd.append("title", editing.title || "");
-      // instructions can be empty string – we still send it to persist clearing
       fd.append("instructions", editing.instructions ?? "");
       if (editing.due_date) fd.append("due_date", editing.due_date);
-      else fd.append("due_date", ""); // clear due date if user erased it
-
-      // Replace file only if a new one was chosen
+      else fd.append("due_date", "");
       if (editFile) fd.append("file", editFile);
 
       await AxiosInstance.patch(`assignments/${editing.id}/`, fd);
@@ -243,11 +278,10 @@ export default function TeacherAssignments() {
 
   // ---------------- Pretty labels for list ----------------
   const labelMaps = useMemo(() => {
-    // Build from all rows to ensure labels exist even when selects change
     const classes = new Map();
     const sections = new Map();
     const subjects = new Map();
-    rows.forEach(r => {
+    rows.forEach((r) => {
       if (!classes.has(r.classId)) classes.set(r.classId, r.classLabel);
       if (!sections.has(r.sectionId)) sections.set(r.sectionId, r.sectionLabel);
       if (!subjects.has(r.subjectId)) subjects.set(r.subjectId, r.subjectLabel);
@@ -271,18 +305,30 @@ export default function TeacherAssignments() {
       <h2 className="text-xl font-semibold">Assignments</h2>
 
       {/* Create / Edit form */}
-      <form onSubmit={editing ? saveEdit : submit} className="bg-white rounded-xl border p-4 grid gap-3">
+      <form
+        onSubmit={editing ? saveEdit : submit}
+        className="bg-white rounded-xl border p-4 grid gap-3"
+      >
         {!editing && (
           <>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               <select
                 className="select select-bordered"
                 value={selected.classKey}
-                onChange={(e) => setSelected(s => ({ ...s, classKey: e.target.value, sectionKey: "", subjectKey: "" }))}
+                onChange={(e) =>
+                  setSelected((s) => ({
+                    ...s,
+                    classKey: e.target.value,
+                    sectionKey: "",
+                    subjectKey: "",
+                  }))
+                }
               >
                 <option value="">Class</option>
-                {classOptions.map(o => (
-                  <option key={o.key} value={o.key}>{o.label}</option>
+                {classOptions.map((o) => (
+                  <option key={o.key} value={o.key}>
+                    {o.label}
+                  </option>
                 ))}
               </select>
 
@@ -290,11 +336,19 @@ export default function TeacherAssignments() {
                 className="select select-bordered"
                 value={selected.sectionKey}
                 disabled={!selected.classKey}
-                onChange={(e) => setSelected(s => ({ ...s, sectionKey: e.target.value, subjectKey: "" }))}
+                onChange={(e) =>
+                  setSelected((s) => ({
+                    ...s,
+                    sectionKey: e.target.value,
+                    subjectKey: "",
+                  }))
+                }
               >
                 <option value="">Section</option>
-                {sectionOptions.map(o => (
-                  <option key={o.key} value={o.key}>{o.label}</option>
+                {sectionOptions.map((o) => (
+                  <option key={o.key} value={o.key}>
+                    {o.label}
+                  </option>
                 ))}
               </select>
 
@@ -302,11 +356,15 @@ export default function TeacherAssignments() {
                 className="select select-bordered"
                 value={selected.subjectKey}
                 disabled={!selected.classKey || !selected.sectionKey}
-                onChange={(e) => setSelected(s => ({ ...s, subjectKey: e.target.value }))}
+                onChange={(e) =>
+                  setSelected((s) => ({ ...s, subjectKey: e.target.value }))
+                }
               >
                 <option value="">Subject</option>
-                {subjectOptions.map(o => (
-                  <option key={o.key} value={o.key}>{o.label}</option>
+                {subjectOptions.map((o) => (
+                  <option key={o.key} value={o.key}>
+                    {o.label}
+                  </option>
                 ))}
               </select>
             </div>
@@ -315,21 +373,27 @@ export default function TeacherAssignments() {
               className="input input-bordered"
               placeholder="Title"
               value={selected.title}
-              onChange={(e) => setSelected(s => ({ ...s, title: e.target.value }))}
+              onChange={(e) =>
+                setSelected((s) => ({ ...s, title: e.target.value }))
+              }
             />
 
             <textarea
               className="textarea textarea-bordered"
               placeholder="Instructions (optional)"
               value={selected.instructions}
-              onChange={(e) => setSelected(s => ({ ...s, instructions: e.target.value }))}
+              onChange={(e) =>
+                setSelected((s) => ({ ...s, instructions: e.target.value }))
+              }
             />
 
             <input
               type="date"
               className="input input-bordered"
               value={selected.due_date}
-              onChange={(e) => setSelected(s => ({ ...s, due_date: e.target.value }))}
+              onChange={(e) =>
+                setSelected((s) => ({ ...s, due_date: e.target.value }))
+              }
             />
 
             <input
@@ -348,33 +412,48 @@ export default function TeacherAssignments() {
         {editing && (
           <>
             <div className="alert">
-              <span>Editing: <strong>{editing.title || "(untitled)"}</strong></span>
+              <span>
+                Editing: <strong>{editing.title || "(untitled)"}</strong>
+              </span>
             </div>
 
             <input
               className="input input-bordered"
               placeholder="Title"
               value={editing.title}
-              onChange={(e) => setEditing(s => ({ ...s, title: e.target.value }))}
+              onChange={(e) =>
+                setEditing((s) => ({ ...s, title: e.target.value }))
+              }
             />
 
             <textarea
               className="textarea textarea-bordered"
               placeholder="Instructions (optional)"
               value={editing.instructions}
-              onChange={(e) => setEditing(s => ({ ...s, instructions: e.target.value }))}
+              onChange={(e) =>
+                setEditing((s) => ({ ...s, instructions: e.target.value }))
+              }
             />
 
             <input
               type="date"
               className="input input-bordered"
               value={editing.due_date || ""}
-              onChange={(e) => setEditing(s => ({ ...s, due_date: e.target.value }))}
+              onChange={(e) =>
+                setEditing((s) => ({ ...s, due_date: e.target.value }))
+              }
             />
 
             <div className="flex items-center gap-3">
               {editing.fileUrl ? (
-                <a className="link" href={editing.fileUrl} target="_blank" rel="noreferrer">Current file</a>
+                <a
+                  className="link"
+                  href={editing.fileUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Current file
+                </a>
               ) : (
                 <span className="opacity-60 text-sm">No file uploaded</span>
               )}
@@ -391,7 +470,9 @@ export default function TeacherAssignments() {
               <button className="btn btn-primary" disabled={saving}>
                 {saving ? "Saving…" : "Save changes"}
               </button>
-              <button type="button" className="btn" onClick={cancelEdit}>Cancel</button>
+              <button type="button" className="btn" onClick={cancelEdit}>
+                Cancel
+              </button>
             </div>
           </>
         )}
@@ -404,15 +485,24 @@ export default function TeacherAssignments() {
           <ul className="space-y-2">
             {list.map((a) => {
               const labels = human(a);
-              const isImage = a.file && /\.(png|jpe?g|gif|webp)$/i.test(a.file);
+              const isImage =
+                a.file && /\.(png|jpe?g|gif|webp)$/i.test(a.file || "");
               return (
-                <li key={a.id} className="flex items-center justify-between border rounded p-2">
+                <li
+                  key={a.id}
+                  className="flex items-center justify-between border rounded p-2"
+                >
                   <div className="flex items-center gap-3">
                     {isImage && (
                       <img
                         src={a.file}
                         alt={a.title}
-                        style={{ width: 56, height: 56, objectFit: "cover", borderRadius: 8 }}
+                        style={{
+                          width: 56,
+                          height: 56,
+                          objectFit: "cover",
+                          borderRadius: 8,
+                        }}
                       />
                     )}
                     <div>
@@ -422,17 +512,33 @@ export default function TeacherAssignments() {
                         {a.due_date ? ` • Due: ${a.due_date}` : ""}
                       </div>
                       {a.instructions ? (
-                        <div className="text-sm mt-1 line-clamp-2">{a.instructions}</div>
+                        <div className="text-sm mt-1 line-clamp-2">
+                          {a.instructions}
+                        </div>
                       ) : null}
                       {a.file && !isImage && (
-                        <a className="link text-sm" href={a.file} target="_blank" rel="noreferrer">Open file</a>
+                        <a
+                          className="link text-sm"
+                          href={a.file}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Open file
+                        </a>
                       )}
                     </div>
                   </div>
 
                   <div className="flex items-center gap-2">
-                    <button className="btn btn-sm" onClick={() => openEdit(a)}>Edit</button>
-                    <button className="btn btn-sm btn-error" onClick={() => handleDelete(a.id)}>Delete</button>
+                    <button className="btn btn-sm" onClick={() => openEdit(a)}>
+                      Edit
+                    </button>
+                    <button
+                      className="btn btn-sm btn-error"
+                      onClick={() => handleDelete(a.id)}
+                    >
+                      Delete
+                    </button>
                   </div>
                 </li>
               );

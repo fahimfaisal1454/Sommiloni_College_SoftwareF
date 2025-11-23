@@ -3,18 +3,6 @@ import { useEffect, useMemo, useState } from "react";
 import AxiosInstance from "../../../components/AxiosInstance";
 import { toast } from "react-hot-toast";
 
-const GRAND_ID = "__grand__";
-
-/* detect weights for 1st/2nd/final */
-function weightForExam(ex) {
-  const name = (ex?.name || "").toLowerCase();
-  if (/(final|term\s*3|third)/.test(name)) return 0.5;
-  if (/(2nd|second|term\s*2)/.test(name)) return 0.25;
-  if (/(1st|first|term\s*1)/.test(name)) return 0.25;
-  // anything else: no weight (ignored in grand)
-  return 0;
-}
-
 /* ---------- Component ---------- */
 export default function AdminReport() {
   /* ---------- PRINT CSS (only marksheet prints) ---------- */
@@ -95,11 +83,17 @@ export default function AdminReport() {
   /* ---------- load classes for year ---------- */
   useEffect(() => {
     if (!year) {
-      setClasses([]); setSections([]);
-      setClassId(""); setSectionId("");
-      setExams([]); setExamId("");
-      setRoster({}); setSubjectMeta({});
-      setSelectedStudentId(null); setDetailRows([]); setTotals(null);
+      setClasses([]);
+      setSections([]);
+      setClassId("");
+      setSectionId("");
+      setExams([]);
+      setExamId("");
+      setRoster({});
+      setSubjectMeta({});
+      setSelectedStudentId(null);
+      setDetailRows([]);
+      setTotals(null);
       return;
     }
     (async () => {
@@ -116,20 +110,27 @@ export default function AdminReport() {
   useEffect(() => {
     const cls = classes.find((c) => String(c.id) === String(classId));
     const secs = (cls?.sections_detail || cls?.sections || []).map((s) => ({
-      id: s.id, name: s.name,
+      id: s.id,
+      name: s.name,
     }));
     setSections(secs);
     setSectionId("");
-    setExams([]); setExamId("");
-    setRoster({}); setSubjectMeta({});
-    setSelectedStudentId(null); setDetailRows([]); setTotals(null);
+    setExams([]);
+    setExamId("");
+    setRoster({});
+    setSubjectMeta({});
+    setSelectedStudentId(null);
+    setDetailRows([]);
+    setTotals(null);
   }, [classId, classes]);
 
   /* ---------- exams (year + class + section) ---------- */
   useEffect(() => {
     (async () => {
       if (!year || !classId || !sectionId) {
-        setExams([]); setExamId(""); return;
+        setExams([]);
+        setExamId("");
+        return;
       }
       try {
         const { data } = await AxiosInstance.get("exams/", {
@@ -139,7 +140,8 @@ export default function AdminReport() {
         setExams(list);
         if (!examId && list.length) setExamId(String(list[0].id));
       } catch {
-        setExams([]); setExamId("");
+        setExams([]);
+        setExamId("");
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -215,9 +217,17 @@ export default function AdminReport() {
           const id = Number(s.id ?? s.student_id ?? s.student);
           if (!id) continue;
           const roll =
-            s.roll_number ?? s.roll ?? s.student_roll ?? s?.student?.roll_number ?? "—";
+            s.roll_number ??
+            s.roll ??
+            s.student_roll ??
+            s?.student?.roll_number ??
+            "—";
           const name =
-            s.full_name ?? s.name ?? s.student_name ?? s?.student?.full_name ?? `Student ${id}`;
+            s.full_name ??
+            s.name ??
+            s.student_name ??
+            s?.student?.full_name ??
+            `Student ${id}`;
           map[id] = { roll, name };
         }
         setRoster(map);
@@ -226,7 +236,11 @@ export default function AdminReport() {
             .map((s) => ({
               id: Number(s.id ?? s.student_id ?? s.student),
               roll:
-                s.roll_number ?? s.roll ?? s.student_roll ?? s?.student?.roll_number ?? "—",
+                s.roll_number ??
+                s.roll ??
+                s.student_roll ??
+                s?.student?.roll_number ??
+                "—",
             }))
             .sort((a, b) => String(a.roll).localeCompare(String(b.roll)))[0];
           if (first?.id) setSelectedStudentId(first.id);
@@ -260,7 +274,8 @@ export default function AdminReport() {
   /* ---------- build detail table (right pane) ---------- */
   useEffect(() => {
     (async () => {
-      setDetailRows([]); setTotals(null);
+      setDetailRows([]);
+      setTotals(null);
       if (!selectedStudentId || !year || !classId || !sectionId) return;
       if (!examId) return;
 
@@ -268,76 +283,25 @@ export default function AdminReport() {
       try {
         let rowsBySubject = new Map();
 
-        if (examId === GRAND_ID) {
-          // Weighted combine across 1st(25%) + 2nd(25%) + Final(50%)
-          const weightedExams = exams
-            .map((e) => ({ e, w: weightForExam(e) }))
-            .filter((x) => x.w > 0);
+        // single exam only (no weighted grand total)
+        const selectedExam = exams.find((e) => String(e.id) === String(examId));
+        if (!selectedExam) return;
 
-          if (weightedExams.length === 0) {
-            setLoadingDetails(false);
-            return;
-          }
+        const map = await fetchSubjectMarksForExam(selectedExam, selectedStudentId);
 
-          // fetch marks per weighted exam
-          const perExam = await Promise.all(
-            weightedExams.map(async ({ e, w }) => {
-              const m = await fetchSubjectMarksForExam(e, selectedStudentId);
-              return { weight: w, marks: m };
-            })
-          );
-
-          // combine
-          rowsBySubject = new Map();
-          const subjectIds = new Set([
-            ...Object.keys(subjectMeta),
-            ...perExam.flatMap(({ marks }) => Array.from(marks.keys())),
-          ]);
-
-          for (const sid of subjectIds) {
-            let score = 0;
-            let gpa = 0;
-            let any = false;
-            for (const { weight, marks } of perExam) {
-              const mk = marks.get(sid);
-              if (mk && (mk.score != null || mk.gpa != null)) {
-                any = true;
-                if (mk.score != null) score += Number(mk.score || 0) * weight;
-                if (mk.gpa != null) gpa += Number(mk.gpa || 0) * weight;
-              }
-            }
-            if (any) {
-              rowsBySubject.set(sid, {
-                subject_id: sid,
-                subject_name: subjectMeta[sid]?.name || sid,
-                teacher_name: subjectMeta[sid]?.teacher_name || "—",
-                score,
-                gpa,
-                letter: letterFromGPA(gpa),
-              });
-            }
-          }
-        } else {
-          // single exam
-          const selectedExam = exams.find((e) => String(e.id) === String(examId));
-          if (!selectedExam) return;
-
-          const map = await fetchSubjectMarksForExam(selectedExam, selectedStudentId);
-
-          // union of subjects we know + marks returned
-          const union = new Set([...Object.keys(subjectMeta), ...map.keys()]);
-          rowsBySubject = new Map();
-          for (const sid of union) {
-            const mk = map.get(sid);
-            rowsBySubject.set(sid, {
-              subject_id: sid,
-              subject_name: subjectMeta[sid]?.name || sid,
-              teacher_name: subjectMeta[sid]?.teacher_name || "—",
-              score: mk?.score ?? null,
-              gpa: mk?.gpa ?? null,
-              letter: mk?.letter ?? (mk?.gpa != null ? letterFromGPA(mk.gpa) : "—"),
-            });
-          }
+        // union of subjects we know + marks returned
+        const union = new Set([...Object.keys(subjectMeta), ...map.keys()]);
+        rowsBySubject = new Map();
+        for (const sid of union) {
+          const mk = map.get(sid);
+          rowsBySubject.set(sid, {
+            subject_id: sid,
+            subject_name: subjectMeta[sid]?.name || sid,
+            teacher_name: subjectMeta[sid]?.teacher_name || "—",
+            score: mk?.score ?? null,
+            gpa: mk?.gpa ?? null,
+            letter: mk?.letter ?? (mk?.gpa != null ? letterFromGPA(mk.gpa) : "—"),
+          });
         }
 
         // to array, sort by subject name
@@ -370,7 +334,6 @@ export default function AdminReport() {
     : null;
 
   const currentExamName = useMemo(() => {
-    if (examId === GRAND_ID) return "Grand total (25% + 25% + 50%)";
     return exams.find((e) => String(e.id) === String(examId))?.name || "";
   }, [examId, exams]);
 
@@ -436,7 +399,9 @@ export default function AdminReport() {
           >
             <option value="">Select year…</option>
             {years.map((y) => (
-              <option key={y} value={y}>{y}</option>
+              <option key={y} value={y}>
+                {y}
+              </option>
             ))}
           </select>
         </div>
@@ -449,9 +414,13 @@ export default function AdminReport() {
             onChange={(e) => setClassId(e.target.value)}
             disabled={!year}
           >
-            <option value="">{year ? "Select class…" : "Select a year first"}</option>
+            <option value="">
+              {year ? "Select class…" : "Select a year first"}
+            </option>
             {classes.map((c) => (
-              <option key={c.id} value={c.id}>{c.name}</option>
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
             ))}
           </select>
         </div>
@@ -466,7 +435,9 @@ export default function AdminReport() {
           >
             <option value="">Select section…</option>
             {sections.map((s) => (
-              <option key={s.id} value={s.id}>{s.name}</option>
+              <option key={s.id} value={s.id}>
+                {s.name}
+              </option>
             ))}
           </select>
         </div>
@@ -482,12 +453,10 @@ export default function AdminReport() {
             <option value="">Select exam…</option>
             {exams.map((ex) => (
               <option key={ex.id} value={ex.id}>
-                {ex.name}{ex.is_published ? " ✅" : ""}
+                {ex.name}
+                {ex.is_published ? " ✅" : ""}
               </option>
             ))}
-            {exams.length > 0 && (
-              <option value={GRAND_ID}>Grand total (25% + 25% + 50%)</option>
-            )}
           </select>
         </div>
       </div>
@@ -515,7 +484,9 @@ export default function AdminReport() {
                   >
                     <div>
                       <div className="font-medium">{s.name}</div>
-                      <div className="text-xs text-slate-500">Roll: {s.roll}</div>
+                      <div className="text-xs text-slate-500">
+                        Roll: {s.roll}
+                      </div>
                     </div>
                     <div className="text-xs text-slate-500">View</div>
                   </li>
@@ -526,7 +497,10 @@ export default function AdminReport() {
         </div>
 
         {/* Detail panel (PRINT TARGET) */}
-        <div id="print-area" className="bg-white border rounded overflow-hidden md:col-span-2">
+        <div
+          id="print-area"
+          className="bg-white border rounded overflow-hidden md:col-span-2"
+        >
           {/* Header + actions (actions are no-print) */}
           <div className="px-3 py-2 bg-slate-50 border-b text-sm font-semibold flex items-center justify-between">
             <div>
@@ -555,7 +529,9 @@ export default function AdminReport() {
           </div>
 
           {!selectedStudent ? (
-            <div className="p-4 text-sm text-slate-500">Select a student to view subjects.</div>
+            <div className="p-4 text-sm text-slate-500">
+              Select a student to view subjects.
+            </div>
           ) : loadingDetails ? (
             <div className="p-4 text-sm">Loading…</div>
           ) : detailRows.length === 0 ? (
@@ -579,11 +555,15 @@ export default function AdminReport() {
                       <td className="px-2 py-1 border text-center">
                         {r.score != null ? Number(r.score).toFixed(2) : "—"}
                       </td>
-                      <td className="px-2 py-1 border text-center">{r.letter ?? "—"}</td>
+                      <td className="px-2 py-1 border text-center">
+                        {r.letter ?? "—"}
+                      </td>
                       <td className="px-2 py-1 border text-center">
                         {r.gpa != null ? Number(r.gpa).toFixed(2) : "—"}
                       </td>
-                      <td className="px-2 py-1 border">{r.teacher_name ?? "—"}</td>
+                      <td className="px-2 py-1 border">
+                        {r.teacher_name ?? "—"}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -591,7 +571,12 @@ export default function AdminReport() {
                 {totals && (
                   <tfoot>
                     <tr className="bg-slate-50 font-medium">
-                      <td className="px-2 py-1 border text-right" colSpan={1}>Total</td>
+                      <td
+                        className="px-2 py-1 border text-right"
+                        colSpan={1}
+                      >
+                        Total
+                      </td>
                       <td className="px-2 py-1 border text-center">
                         {totals.totalScore.toFixed(2)}
                       </td>
@@ -604,8 +589,12 @@ export default function AdminReport() {
                       <td className="px-2 py-1 border" />
                     </tr>
                     <tr>
-                      <td colSpan={5} className="px-2 py-2 text-xs text-slate-500 border">
-                        Averages based on {totals.count} subject{totals.count > 1 ? "s" : ""} with marks.
+                      <td
+                        colSpan={5}
+                        className="px-2 py-2 text-xs text-slate-500 border"
+                      >
+                        Averages based on {totals.count} subject
+                        {totals.count > 1 ? "s" : ""} with marks.
                       </td>
                     </tr>
                   </tfoot>
