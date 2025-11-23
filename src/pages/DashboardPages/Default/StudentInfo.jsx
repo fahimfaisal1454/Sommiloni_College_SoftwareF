@@ -3,6 +3,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import axiosInstance from "../../../components/AxiosInstance";
 import Select from "react-select";
 import { Toaster, toast } from "react-hot-toast";
+import * as XLSX from "xlsx";
+import { saveAs } from "file-saver";
 
 /* --------------------- Small helpers --------------------- */
 const required = (v) => v !== null && v !== undefined && String(v).trim() !== "";
@@ -57,6 +59,43 @@ const absUrl = (url) => {
   return isAbs ? url : `${base}${url.startsWith("/") ? "" : "/"}${url}`;
 };
 
+/* ----- Password cache helpers (like TeacherInfo) ----- */
+
+const PASSWORD_STORAGE_KEY = "student_plain_passwords_v1";
+
+const loadPasswordMap = () => {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(PASSWORD_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") return parsed;
+  } catch {
+    // ignore
+  }
+  return {};
+};
+
+const savePasswordMap = (map) => {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(PASSWORD_STORAGE_KEY, JSON.stringify(map));
+  } catch {
+    // ignore
+  }
+};
+
+// random strong-ish password
+const generateRandomPassword = () => {
+  const chars =
+    "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789@#$%&?";
+  let out = "";
+  for (let i = 0; i < 10; i += 1) {
+    out += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return out;
+};
+
 /* --------------------- Component --------------------- */
 export default function StudentInfo() {
   /* Data */
@@ -64,7 +103,7 @@ export default function StudentInfo() {
 
   // classes/sections store
   const [allClasses, setAllClasses] = useState([]); // raw from classes/
-  const [years, setYears] = useState([]);           // [2026, 2025, ...]
+  const [years, setYears] = useState([]); // [2026, 2025, ...]
 
   /* UI */
   const [loading, setLoading] = useState(true);
@@ -72,6 +111,7 @@ export default function StudentInfo() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   /* Filters */
   const [searchTerm, setSearchTerm] = useState("");
@@ -94,7 +134,7 @@ export default function StudentInfo() {
     photo: null,
     user: null,
   });
-  const [formYear, setFormYear] = useState(null); // NEW: cascade in modal
+  const [formYear, setFormYear] = useState(null); // cascade in modal
   const [preview, setPreview] = useState(null);
   const [touched, setTouched] = useState({});
 
@@ -109,11 +149,17 @@ export default function StudentInfo() {
     must_change_password: true,
   });
   const [userEditedUsername, setUserEditedUsername] = useState(false);
+  const [userEditedPassword, setUserEditedPassword] = useState(false);
+  const [isNewUserForForm, setIsNewUserForForm] = useState(true); // true when we're creating a new login
 
   // username check state
   const [checkingUsername, setCheckingUsername] = useState(false);
   const [usernameAvailable, setUsernameAvailable] = useState(null); // true/false/null
   const [usernameNote, setUsernameNote] = useState("");
+
+  // cache for usernames & passwords by user id (for table & Excel)
+  const [usernamesByUserId, setUsernamesByUserId] = useState({});
+  const [passwordsByUserId, setPasswordsByUserId] = useState({});
 
   // email/phone live availability (for student record + user account)
   const emailTimerRef = useRef(null);
@@ -123,25 +169,32 @@ export default function StudentInfo() {
   const [emailState, setEmailState] = useState({ status: "idle", message: "" }); // idle|checking|ok|taken
   const [phoneState, setPhoneState] = useState({ status: "idle", message: "" });
 
+  /* Password visibility */
+  const [showPassword, setShowPassword] = useState(false);
+
   /* Pagination */
   const [page, setPage] = useState(1);
   const pageSize = 12;
 
   /* ---------- Derived (classes & years) ---------- */
-  // years from allClasses
   const yearOptions = useMemo(
     () => years.map((y) => ({ value: y, label: String(y) })),
     [years]
   );
 
-  // classesById for label lookup
   const classesById = useMemo(() => {
     const m = {};
-    allClasses.forEach((c) => (m[c.id] = { name: c.name, year: c.year, sections_detail: c.sections_detail, sections: c.sections }));
+    allClasses.forEach((c) => {
+      m[c.id] = {
+        name: c.name,
+        year: c.year,
+        sections_detail: c.sections_detail,
+        sections: c.sections,
+      };
+    });
     return m;
   }, [allClasses]);
 
-  // helper: get normalized sections for any class id
   const getSectionsForClassId = (cid) => {
     if (!cid) return [];
     const c = classesById[cid];
@@ -153,7 +206,6 @@ export default function StudentInfo() {
     return normalized;
   };
 
-  // Filter dropdown: classes for selected filterYear
   const classOptions = useMemo(() => {
     const list = filterYear
       ? allClasses.filter((c) => Number(c.year) === Number(filterYear))
@@ -161,7 +213,6 @@ export default function StudentInfo() {
     return list.map((c) => ({ value: c.id, label: c.name }));
   }, [allClasses, filterYear]);
 
-  // Filter dropdown: sections for selected filter class
   const filterSectionOptions = useMemo(() => {
     if (!filterClassId) return [];
     return getSectionsForClassId(Number(filterClassId)).map((s) => ({
@@ -170,7 +221,6 @@ export default function StudentInfo() {
     }));
   }, [filterClassId, classesById]);
 
-  // Modal: classes limited by formYear
   const classOptionsForForm = useMemo(() => {
     const list = formYear
       ? allClasses.filter((c) => Number(c.year) === Number(formYear))
@@ -178,7 +228,6 @@ export default function StudentInfo() {
     return list.map((c) => ({ value: c.id, label: c.name }));
   }, [allClasses, formYear]);
 
-  // Modal: sections for selected class inside form
   const sectionOptionsForForm = useMemo(() => {
     if (!form.class_name) return [];
     return getSectionsForClassId(Number(form.class_name)).map((s) => ({
@@ -187,7 +236,6 @@ export default function StudentInfo() {
     }));
   }, [form.class_name, classesById]);
 
-  // For table label fallback
   const sectionNameById = useMemo(() => {
     const m = {};
     allClasses.forEach((c) => {
@@ -206,6 +254,9 @@ export default function StudentInfo() {
       try {
         setLoading(true);
 
+        // load cached passwords from localStorage
+        setPasswordsByUserId(loadPasswordMap());
+
         // Load students
         const studentsRes = await axiosInstance.get("students/");
         const studentsList = (Array.isArray(studentsRes.data)
@@ -214,7 +265,7 @@ export default function StudentInfo() {
         ).map((s) => ({ ...s, photo: absUrl(s.photo) }));
         setStudents(studentsList);
 
-        // Load classes (all), derive years
+        // Load classes
         const classesRes = await axiosInstance.get("classes/");
         const cls = Array.isArray(classesRes.data)
           ? classesRes.data
@@ -237,20 +288,71 @@ export default function StudentInfo() {
     })();
   }, []);
 
+  /* ---------- Prefetch usernames for students with users ---------- */
+  useEffect(() => {
+    const ids = Array.from(
+      new Set(
+        students
+          .map((s) => s.user)
+          .filter((id) => id !== null && id !== undefined)
+      )
+    ).filter((id) => !(id in usernamesByUserId));
+
+    if (!ids.length) return;
+
+    (async () => {
+      try {
+        const results = await Promise.all(
+          ids.map((id) =>
+            axiosInstance
+              .get(`admin/users/${id}/`)
+              .then((res) => [id, res.data?.username || ""])
+              .catch(() => [id, ""])
+          )
+        );
+        setUsernamesByUserId((prev) => {
+          const next = { ...prev };
+          for (const [id, uname] of results) next[id] = uname;
+          return next;
+        });
+      } catch (err) {
+        console.error("Failed to preload usernames", err);
+      }
+    })();
+  }, [students, usernamesByUserId]);
+
   /* ---------- Filtering ---------- */
   const filtered = useMemo(() => {
     let out = [...students];
     if (searchTerm.trim()) {
       const needle = searchTerm.trim().toLowerCase();
-      out = out.filter((s) => String(s.full_name || "").toLowerCase().includes(needle));
+      out = out.filter((s) =>
+        String(s.full_name || "").toLowerCase().includes(needle)
+      );
     }
     if (filterYear) {
-      out = out.filter((s) => Number(classesById[s.class_name]?.year) === Number(filterYear));
+      out = out.filter(
+        (s) =>
+          Number(classesById[s.class_name]?.year) === Number(filterYear)
+      );
     }
-    if (filterClassId) out = out.filter((s) => Number(s.class_name) === Number(filterClassId));
-    if (filterSectionId) out = out.filter((s) => Number(s.section) === Number(filterSectionId));
+    if (filterClassId)
+      out = out.filter(
+        (s) => Number(s.class_name) === Number(filterClassId)
+      );
+    if (filterSectionId)
+      out = out.filter(
+        (s) => Number(s.section) === Number(filterSectionId)
+      );
     return out;
-  }, [students, searchTerm, filterYear, filterClassId, filterSectionId, classesById]);
+  }, [
+    students,
+    searchTerm,
+    filterYear,
+    filterClassId,
+    filterSectionId,
+    classesById,
+  ]);
 
   const totalPages = Math.ceil(filtered.length / pageSize) || 1;
   const pageRows = useMemo(() => {
@@ -263,7 +365,10 @@ export default function StudentInfo() {
     setTableBusy(true);
     try {
       const res = await axiosInstance.get("students/");
-      const list = (Array.isArray(res.data) ? res.data : res.data?.results || []).map((s) => ({
+      const list = (Array.isArray(res.data)
+        ? res.data
+        : res.data?.results || []
+      ).map((s) => ({
         ...s,
         photo: absUrl(s.photo),
       }));
@@ -272,6 +377,97 @@ export default function StudentInfo() {
       toast.error("Refresh failed.");
     } finally {
       setTableBusy(false);
+    }
+  };
+
+  /* ---------- Excel Download ---------- */
+  const handleExportExcel = async () => {
+    if (loading) return;
+    if (!filtered.length) {
+      toast.error("No students to export for current filters.");
+      return;
+    }
+    setExporting(true);
+    try {
+      const localUserCache = { ...usernamesByUserId };
+      const localPasswordCache = { ...passwordsByUserId };
+
+      const rows = await Promise.all(
+        filtered.map(async (s, idx) => {
+          let username = "";
+
+          if (s.user) {
+            if (localUserCache[s.user]) {
+              username = localUserCache[s.user];
+            } else {
+              try {
+                const { data } = await axiosInstance.get(
+                  `admin/users/${s.user}/`
+                );
+                username = data?.username || "";
+                localUserCache[s.user] = username;
+              } catch (e) {
+                console.error("Failed to fetch user", s.user, e);
+              }
+            }
+          }
+
+          const classLabel =
+            s.class_name_label || classesById[s.class_name]?.name || "";
+          const sectionLabel =
+            s.section_label || sectionNameById[s.section] || "";
+
+          const password =
+            s.user && localPasswordCache[s.user]
+              ? localPasswordCache[s.user]
+              : username || "";
+
+          return {
+            SL: idx + 1,
+            Name: s.full_name || "",
+            Roll: s.roll_number || "",
+            Class: classLabel,
+            Section: sectionLabel,
+            "User ID": username,
+            Pass: password,
+          };
+        })
+      );
+
+      // update cache with any newly fetched usernames
+      setUsernamesByUserId((prev) => ({ ...prev, ...localUserCache }));
+
+      const worksheet = XLSX.utils.json_to_sheet(rows);
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, "Students");
+
+      const wbout = XLSX.write(workbook, {
+        bookType: "xlsx",
+        type: "array",
+      });
+      const blob = new Blob([wbout], {
+        type: "application/octet-stream",
+      });
+
+      const className =
+        filterClassId && classesById[filterClassId]
+          ? classesById[filterClassId].name
+          : "all";
+      const sectionName =
+        filterSectionId && sectionNameById[filterSectionId]
+          ? sectionNameById[filterSectionId]
+          : "all";
+      const dateStr = new Date().toISOString().slice(0, 10);
+
+      const filename = `students_credentials_year-${filterYear || "all"}_class-${className}_section-${sectionName}_${dateStr}.xlsx`;
+
+      saveAs(blob, filename);
+      toast.success("Excel downloaded.");
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to generate Excel.");
+    } finally {
+      setExporting(false);
     }
   };
 
@@ -298,7 +494,7 @@ export default function StudentInfo() {
       photo: null,
       user: null,
     });
-    setFormYear(null); // user picks year first
+    setFormYear(null);
     setPreview(null);
     setTouched({});
     setCreateLogin(false);
@@ -311,9 +507,12 @@ export default function StudentInfo() {
       must_change_password: true,
     });
     setUserEditedUsername(false);
+    setUserEditedPassword(false);
+    setIsNewUserForForm(true);
     resetUsernameState();
     setEmailState({ status: "idle", message: "" });
     setPhoneState({ status: "idle", message: "" });
+    setShowPassword(false);
     setModalOpen(true);
   };
 
@@ -334,12 +533,15 @@ export default function StudentInfo() {
       photo: null,
       user: s.user || null,
     });
-    setFormYear(cls?.year != null ? Number(cls.year) : null); // ensure cascading in modal
+    setFormYear(cls?.year != null ? Number(cls.year) : null);
     setPreview(absUrl(s.photo) || null);
     setTouched({});
-    setCreateLogin(Boolean(s.user));
+    const hasUser = Boolean(s.user);
+    setCreateLogin(hasUser);
+    setIsNewUserForForm(!hasUser); // if no user yet, we'll auto-generate login
     setUserForm({
-      username: "",
+      username:
+        hasUser && usernamesByUserId[s.user] ? usernamesByUserId[s.user] : "",
       email: s.contact_email || "",
       phone: s.contact_phone || "",
       password: "",
@@ -347,9 +549,11 @@ export default function StudentInfo() {
       must_change_password: true,
     });
     setUserEditedUsername(false);
+    setUserEditedPassword(false);
     resetUsernameState();
     setEmailState({ status: "idle", message: "" });
     setPhoneState({ status: "idle", message: "" });
+    setShowPassword(false);
     setModalOpen(true);
   };
 
@@ -383,19 +587,36 @@ export default function StudentInfo() {
   };
   const onBlur = (key) => setTouched((t) => ({ ...t, [key]: true }));
 
-  // auto-suggest username from full_name if createLogin on and user hasn't typed
+  /* ---------- Auto-generate username & password ---------- */
+  // Username from full name (only for new logins)
   useEffect(() => {
     if (!createLogin) return;
+    if (!isNewUserForForm) return;
     if (userEditedUsername) return;
+
     if (!form.full_name) {
-      setUserForm((u) => ({ ...u, username: "" }));
+      setUserForm((u) => ({ ...u, username: "", password: "" }));
       resetUsernameState();
       return;
     }
-    setUserForm((u) => ({ ...u, username: slugifyName(form.full_name) }));
-  }, [form.full_name, createLogin, userEditedUsername]);
 
-  // debounce username availability check (if backend endpoint exists)
+    const suggested = slugifyName(form.full_name);
+    setUserForm((u) => ({ ...u, username: suggested }));
+  }, [form.full_name, createLogin, userEditedUsername, isNewUserForForm]);
+
+  // For new logins: auto-generate a password (shown in field) unless user typed one
+  useEffect(() => {
+    if (!createLogin) return;
+    if (!isNewUserForForm) return;
+    if (userEditedPassword) return;
+
+    setUserForm((u) => {
+      if (u.password) return u; // already has something
+      return { ...u, password: generateRandomPassword() };
+    });
+  }, [createLogin, isNewUserForForm, userEditedPassword]);
+
+  // debounce username availability check
   useEffect(() => {
     if (!createLogin) return;
     const uname = userForm.username?.trim();
@@ -417,7 +638,9 @@ export default function StudentInfo() {
         if (!available && !userEditedUsername) {
           const sug =
             (data?.suggestion && String(data.suggestion)) ||
-            (data?.suggestions && Array.isArray(data.suggestions) && data.suggestions[0]) ||
+            (data?.suggestions &&
+              Array.isArray(data.suggestions) &&
+              data.suggestions[0]) ||
             slugifyName(uname);
           setUserForm((u) => ({ ...u, username: sug }));
           setUsernameNote("That username was taken — suggested a free one.");
@@ -437,11 +660,12 @@ export default function StudentInfo() {
     };
   }, [userForm.username, createLogin, userEditedUsername]);
 
-  /* ---------- Uniqueness checks for email/phone (students & users) ---------- */
+  /* ---------- Uniqueness checks for email/phone ---------- */
   const valueUsedByAnotherStudent = async (field, value, excludeId) => {
     if (!value) return false;
     try {
-      const params = field === "email" ? { contact_email: value } : { contact_phone: value };
+      const params =
+        field === "email" ? { contact_email: value } : { contact_phone: value };
       const res = await axiosInstance.get("students/", { params });
       if (Array.isArray(res.data)) {
         return res.data.some((s) => {
@@ -452,7 +676,7 @@ export default function StudentInfo() {
         });
       }
     } catch {
-      return false; // fail-open; backend still enforces
+      return false;
     }
     return false;
   };
@@ -470,7 +694,7 @@ export default function StudentInfo() {
         );
       }
     } catch {
-      return false; // fail-open
+      return false;
     }
     return false;
   };
@@ -479,15 +703,24 @@ export default function StudentInfo() {
     const email = (form.contact_email || "").trim();
     const mySeq = ++emailSeq.current;
     if (!email) {
-      if (mySeq === emailSeq.current) setEmailState({ status: "idle", message: "" });
+      if (mySeq === emailSeq.current)
+        setEmailState({ status: "idle", message: "" });
       return true;
     }
-    if (mySeq === emailSeq.current) setEmailState({ status: "checking", message: "Checking…" });
-    const usedByStudent = await valueUsedByAnotherStudent("email", email, editingId);
+    if (mySeq === emailSeq.current)
+      setEmailState({ status: "checking", message: "Checking…" });
+    const usedByStudent = await valueUsedByAnotherStudent(
+      "email",
+      email,
+      editingId
+    );
     const usedByAccount = await valueUsedByUser("email", email);
-    if (mySeq !== emailSeq.current) return true; // stale
+    if (mySeq !== emailSeq.current) return true;
     if (usedByStudent || usedByAccount) {
-      setEmailState({ status: "taken", message: "Email is already in use." });
+      setEmailState({
+        status: "taken",
+        message: "Email is already in use.",
+      });
       return false;
     } else {
       setEmailState({ status: "ok", message: "Email is available." });
@@ -499,18 +732,30 @@ export default function StudentInfo() {
     const phone = (form.contact_phone || "").trim();
     const mySeq = ++phoneSeq.current;
     if (!phone) {
-      if (mySeq === phoneSeq.current) setPhoneState({ status: "idle", message: "" });
+      if (mySeq === phoneSeq.current)
+        setPhoneState({ status: "idle", message: "" });
       return true;
     }
-    if (mySeq === phoneSeq.current) setPhoneState({ status: "checking", message: "Checking…" });
-    const usedByStudent = await valueUsedByAnotherStudent("phone", phone, editingId);
+    if (mySeq === phoneSeq.current)
+      setPhoneState({ status: "checking", message: "Checking…" });
+    const usedByStudent = await valueUsedByAnotherStudent(
+      "phone",
+      phone,
+      editingId
+    );
     const usedByAccount = await valueUsedByUser("phone", phone);
-    if (mySeq !== phoneSeq.current) return true; // stale
+    if (mySeq !== phoneSeq.current) return true;
     if (usedByStudent || usedByAccount) {
-      setPhoneState({ status: "taken", message: "Phone number is already in use." });
+      setPhoneState({
+        status: "taken",
+        message: "Phone number is already in use.",
+      });
       return false;
     } else {
-      setPhoneState({ status: "ok", message: "Phone number is available." });
+      setPhoneState({
+        status: "ok",
+        message: "Phone number is available.",
+      });
       return true;
     }
   };
@@ -547,8 +792,10 @@ export default function StudentInfo() {
       return;
     }
 
-    // Ensure latest email/phone uniqueness result
-    const [emailOK, phoneOK] = await Promise.all([checkEmailUnique(), checkPhoneUnique()]);
+    const [emailOK, phoneOK] = await Promise.all([
+      checkEmailUnique(),
+      checkPhoneUnique(),
+    ]);
     if (!emailOK || !phoneOK) {
       toast.error("Fix duplicate email/phone before saving.");
       setSubmitting(false);
@@ -592,7 +839,7 @@ export default function StudentInfo() {
         }
 
         if (savedUserId) {
-          // update existing account
+          // update existing account (only change password if user typed one)
           const patchPayload = {
             username: userForm.username,
             email: userForm.email || form.contact_email || "",
@@ -600,10 +847,45 @@ export default function StudentInfo() {
             is_active: !!userForm.is_active,
             must_change_password: !!userForm.must_change_password,
           };
-          if (userForm.password) patchPayload.password = userForm.password;
-          await axiosInstance.patch(`admin/users/${savedUserId}/`, patchPayload);
+
+          const trimmedPw = (userForm.password || "").trim();
+          const changingPassword = !!trimmedPw && userEditedPassword;
+
+          if (changingPassword) {
+            patchPayload.password = trimmedPw;
+          }
+
+          await axiosInstance.patch(
+            `admin/users/${savedUserId}/`,
+            patchPayload
+          );
+
+          // update username cache
+          setUsernamesByUserId((prev) => ({
+            ...prev,
+            [savedUserId]: userForm.username,
+          }));
+
+          // cache new password if changed
+          if (changingPassword) {
+            setPasswordsByUserId((prev) => {
+              const next = {
+                ...prev,
+                [String(savedUserId)]: trimmedPw,
+              };
+              savePasswordMap(next);
+              return next;
+            });
+          }
         } else {
           // create new account, then link
+          const passwordToUse = (userForm.password || "").trim();
+          if (!passwordToUse) {
+            toast.error("Password is required for login.");
+            setSubmitting(false);
+            return;
+          }
+
           const payload = {
             username: userForm.username,
             email: userForm.email || form.contact_email || "",
@@ -611,12 +893,34 @@ export default function StudentInfo() {
             role: "Student",
             is_active: !!userForm.is_active,
             must_change_password: !!userForm.must_change_password,
+            password: passwordToUse,
           };
-          if (userForm.password) payload.password = userForm.password;
 
           const ures = await axiosInstance.post("admin/users/", payload);
           const newUserId = ures?.data?.id;
-          await axiosInstance.post(`students/${savedStudentId}/link-user/`, { user_id: newUserId });
+          if (newUserId) {
+            await axiosInstance.post(`students/${savedStudentId}/link-user/`, {
+              user_id: newUserId,
+            });
+            // update local username cache
+            setUsernamesByUserId((prev) => ({
+              ...prev,
+              [newUserId]: userForm.username,
+            }));
+            // cache plain password
+            setPasswordsByUserId((prev) => {
+              const next = {
+                ...prev,
+                [String(newUserId)]: passwordToUse,
+              };
+              savePasswordMap(next);
+              return next;
+            });
+
+            toast.success(
+              `Login created. Username: ${userForm.username}, Password: ${passwordToUse}`
+            );
+          }
         }
       }
 
@@ -649,7 +953,7 @@ export default function StudentInfo() {
             Manage student records. Year → Class → Section are required.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={openCreate}
             className="inline-flex items-center justify-center px-4 py-2 rounded-xl bg-blue-600 text-white text-sm font-semibold shadow hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -663,6 +967,14 @@ export default function StudentInfo() {
             title="Refresh list"
           >
             {tableBusy ? "Refreshing…" : "Refresh"}
+          </button>
+          <button
+            onClick={handleExportExcel}
+            className="inline-flex items-center justify-center px-3 py-2 rounded-xl border text-sm bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50"
+            disabled={exporting || loading || !filtered.length}
+            title="Download Excel with current list"
+          >
+            {exporting ? "Exporting…" : "Download Excel"}
           </button>
         </div>
       </div>
@@ -686,12 +998,18 @@ export default function StudentInfo() {
 
         {/* Year */}
         <div>
-          <label className="block text-xs font-medium text-slate-600 mb-1">Year</label>
+          <label className="block text-xs font-medium text-slate-600 mb-1">
+            Year
+          </label>
           <Select
             options={yearOptions}
             isClearable
             placeholder="All years"
-            value={yearOptions.find((o) => Number(o.value) === Number(filterYear)) || null}
+            value={
+              yearOptions.find(
+                (o) => Number(o.value) === Number(filterYear)
+              ) || null
+            }
             onChange={(opt) => {
               const y = opt ? Number(opt.value) : null;
               setFilterYear(y);
@@ -712,12 +1030,18 @@ export default function StudentInfo() {
 
         {/* Class */}
         <div>
-          <label className="block text-xs font-medium text-slate-600 mb-1">Class</label>
+          <label className="block text-xs font-medium text-slate-600 mb-1">
+            Class
+          </label>
           <Select
             options={classOptions}
             isClearable
             placeholder={filterYear ? "All classes (year)" : "All classes"}
-            value={classOptions.find((o) => Number(o.value) === Number(filterClassId)) || null}
+            value={
+              classOptions.find(
+                (o) => Number(o.value) === Number(filterClassId)
+              ) || null
+            }
             onChange={(opt) => {
               const cid = opt ? Number(opt.value) : null;
               setFilterClassId(cid);
@@ -737,15 +1061,18 @@ export default function StudentInfo() {
 
         {/* Section */}
         <div>
-          <label className="block text-xs font-medium text-slate-600 mb-1">Section</label>
+          <label className="block text-xs font-medium text-slate-600 mb-1">
+            Section
+          </label>
           <Select
             options={filterSectionOptions}
             isClearable
             placeholder={filterClassId ? "All sections" : "Pick class first"}
             isDisabled={!filterClassId}
             value={
-              filterSectionOptions.find((o) => Number(o.value) === Number(filterSectionId)) ||
-              null
+              filterSectionOptions.find(
+                (o) => Number(o.value) === Number(filterSectionId)
+              ) || null
             }
             onChange={(opt) => {
               setFilterSectionId(opt ? Number(opt.value) : null);
@@ -773,6 +1100,8 @@ export default function StudentInfo() {
               <th className="py-3 px-4 text-left font-semibold">Roll</th>
               <th className="py-3 px-4 text-left font-semibold">Class</th>
               <th className="py-3 px-4 text-left font-semibold">Section</th>
+              <th className="py-3 px-4 text-left font-semibold">User ID</th>
+              <th className="py-3 px-4 text-left font-semibold">Password</th>
               <th className="py-3 px-4 text-center font-semibold">Actions</th>
             </tr>
           </thead>
@@ -799,56 +1128,92 @@ export default function StudentInfo() {
                     <div className="h-5 w-20 bg-slate-200 rounded" />
                   </td>
                   <td className="p-3">
+                    <div className="h-3 w-16 bg-slate-200 rounded" />
+                  </td>
+                  <td className="p-3">
+                    <div className="h-3 w-16 bg-slate-200 rounded" />
+                  </td>
+                  <td className="p-3">
                     <div className="h-8 w-28 bg-slate-200 rounded" />
                   </td>
                 </tr>
               ))
             ) : filtered.length === 0 ? (
               <tr>
-                <td colSpan={6} className="py-10 text-center text-slate-500">
-                  No students found. Click <span className="font-medium">“Add Student”</span> to
+                <td
+                  colSpan={8}
+                  className="py-10 text-center text-slate-500"
+                >
+                  No students found. Click{" "}
+                  <span className="font-medium">“Add Student”</span> to
                   create one.
                 </td>
               </tr>
             ) : (
-              pageRows.map((s, i) => (
-                <tr key={s.id} className="border-t last:border-b-0">
-                  <td className="py-3 px-4">{(page - 1) * pageSize + i + 1}</td>
-                  <td className="py-3 px-4">
-                    <div className="flex items-center gap-3">
-                      <AvatarCircle name={s.full_name} src={s.photo} />
-                      <span className="font-medium">{s.full_name}</span>
-                    </div>
-                  </td>
-                  <td className="py-3 px-4">{s.roll_number ?? "-"}</td>
-                  <td className="py-3 px-4">
-                    <span className="inline-flex items-center rounded-lg border px-2 py-0.5 text-xs font-medium">
-                      {s.class_name_label || classesById[s.class_name]?.name || "-"}
-                    </span>
-                  </td>
-                  <td className="py-3 px-4">
-                    <span className="inline-flex items-center rounded-lg border px-2 py-0.5 text-xs font-medium">
-                      {s.section_label || sectionNameById[s.section] || "-"}
-                    </span>
-                  </td>
-                  <td className="py-3 px-4">
-                    <div className="flex items-center justify-center gap-2">
-                      <button
-                        onClick={() => openEdit(s)}
-                        className="px-3 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-700"
-                      >
-                        Edit
-                      </button>
-                      <button
-                        onClick={() => onDelete(s.id)}
-                        className="px-3 py-1.5 rounded-lg bg-red-600 text-white hover:bg-red-700"
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))
+              pageRows.map((s, i) => {
+                const userId = s.user;
+                const username =
+                  userId && usernamesByUserId[userId]
+                    ? usernamesByUserId[userId]
+                    : "";
+                const password =
+                  userId && passwordsByUserId[userId]
+                    ? passwordsByUserId[userId]
+                    : username || "";
+
+                return (
+                  <tr key={s.id} className="border-t last:border-b-0">
+                    <td className="py-3 px-4">
+                      {(page - 1) * pageSize + i + 1}
+                    </td>
+                    <td className="py-3 px-4">
+                      <div className="flex items-center gap-3">
+                        <AvatarCircle name={s.full_name} src={s.photo} />
+                        <span className="font-medium">{s.full_name}</span>
+                      </div>
+                    </td>
+                    <td className="py-3 px-4">
+                      {s.roll_number ?? "-"}
+                    </td>
+                    <td className="py-3 px-4">
+                      <span className="inline-flex items-center rounded-lg border px-2 py-0.5 text-xs font-medium">
+                        {s.class_name_label ||
+                          classesById[s.class_name]?.name ||
+                          "-"}
+                      </span>
+                    </td>
+                    <td className="py-3 px-4">
+                      <span className="inline-flex items-center rounded-lg border px-2 py-0.5 text-xs font-medium">
+                        {s.section_label ||
+                          sectionNameById[s.section] ||
+                          "-"}
+                      </span>
+                    </td>
+                    <td className="py-3 px-4">
+                      {username || "-"}
+                    </td>
+                    <td className="py-3 px-4">
+                      {password || "-"}
+                    </td>
+                    <td className="py-3 px-4">
+                      <div className="flex items-center justify-center gap-2">
+                        <button
+                          onClick={() => openEdit(s)}
+                          className="px-3 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-700"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          onClick={() => onDelete(s.id)}
+                          className="px-3 py-1.5 rounded-lg bg-red-600 text-white hover:bg-red-700"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </table>
@@ -864,19 +1229,23 @@ export default function StudentInfo() {
           >
             Previous
           </button>
-          {Array.from({ length: totalPages }, (_, i) => i + 1).map((p) => (
-            <button
-              key={p}
-              onClick={() => setPage(p)}
-              className={`px-3 py-1.5 border rounded-lg ${
-                page === p ? "bg-blue-600 text-white" : ""
-              }`}
-            >
-              {p}
-            </button>
-          ))}
+          {Array.from({ length: totalPages }, (_, i) => i + 1).map(
+            (p) => (
+              <button
+                key={p}
+                onClick={() => setPage(p)}
+                className={`px-3 py-1.5 border rounded-lg ${
+                  page === p ? "bg-blue-600 text-white" : ""
+                }`}
+              >
+                {p}
+              </button>
+            )
+          )}
           <button
-            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            onClick={() =>
+              setPage((p) => Math.min(totalPages, p + 1))
+            }
             disabled={page === totalPages}
             className="px-3 py-1.5 border rounded-lg disabled:opacity-50"
           >
@@ -902,7 +1271,10 @@ export default function StudentInfo() {
                 {editingId ? "Edit Student" : "Add Student"}
               </h2>
 
-              <form onSubmit={onSubmit} className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <form
+                onSubmit={onSubmit}
+                className="grid grid-cols-1 md:grid-cols-2 gap-3"
+              >
                 {/* Full name */}
                 <div className="md:col-span-2">
                   <label className="block text-xs font-medium text-slate-600 mb-1">
@@ -921,7 +1293,9 @@ export default function StudentInfo() {
                     placeholder="e.g., Afsana Rahman"
                   />
                   {touched.full_name && !required(form.full_name) && (
-                    <p className="text-xs text-red-600 mt-1">Name is required.</p>
+                    <p className="text-xs text-red-600 mt-1">
+                      Name is required.
+                    </p>
                   )}
                 </div>
 
@@ -942,9 +1316,12 @@ export default function StudentInfo() {
                     }`}
                     placeholder="e.g., 23"
                   />
-                  {touched.roll_number && !required(form.roll_number) && (
-                    <p className="text-xs text-red-600 mt-1">Roll number is required.</p>
-                  )}
+                  {touched.roll_number &&
+                    !required(form.roll_number) && (
+                      <p className="text-xs text-red-600 mt-1">
+                        Roll number is required.
+                      </p>
+                    )}
                 </div>
 
                 {/* Year (modal cascade) */}
@@ -954,13 +1331,24 @@ export default function StudentInfo() {
                   </label>
                   <Select
                     options={yearOptions}
-                    value={yearOptions.find((o) => Number(o.value) === Number(formYear)) || null}
+                    value={
+                      yearOptions.find(
+                        (o) => Number(o.value) === Number(formYear)
+                      ) || null
+                    }
                     onChange={(opt) => {
                       const y = opt ? Number(opt.value) : null;
                       setFormYear(y);
-                      // reset downstream
-                      setForm((f) => ({ ...f, class_name: null, section: null }));
-                      setTouched((t) => ({ ...t, class_name: false, section: false }));
+                      setForm((f) => ({
+                        ...f,
+                        class_name: null,
+                        section: null,
+                      }));
+                      setTouched((t) => ({
+                        ...t,
+                        class_name: false,
+                        section: false,
+                      }));
                     }}
                     placeholder="Select year"
                     classNamePrefix="rs"
@@ -987,8 +1375,9 @@ export default function StudentInfo() {
                   <Select
                     options={classOptionsForForm}
                     value={
-                      classOptionsForForm.find((o) => Number(o.value) === Number(form.class_name)) ||
-                      null
+                      classOptionsForForm.find(
+                        (o) => Number(o.value) === Number(form.class_name)
+                      ) || null
                     }
                     onChange={(opt) => {
                       setForm((f) => ({
@@ -996,10 +1385,16 @@ export default function StudentInfo() {
                         class_name: opt ? Number(opt.value) : null,
                         section: null,
                       }));
-                      setTouched((t) => ({ ...t, class_name: true, section: false }));
+                      setTouched((t) => ({
+                        ...t,
+                        class_name: true,
+                        section: false,
+                      }));
                     }}
                     onBlur={() => onBlur("class_name")}
-                    placeholder={formYear ? "Select class" : "Pick year first"}
+                    placeholder={
+                      formYear ? "Select class" : "Pick year first"
+                    }
                     isDisabled={!formYear}
                     classNamePrefix="rs"
                     menuPortalTarget={menuPortalTarget}
@@ -1010,7 +1405,9 @@ export default function StudentInfo() {
                         borderRadius: 12,
                         paddingBlock: 2,
                         borderColor:
-                          touched.class_name && form.class_name === null ? "#ef4444" : base.borderColor,
+                          touched.class_name && form.class_name === null
+                            ? "#ef4444"
+                            : base.borderColor,
                         boxShadow: "none",
                         "&:hover": { borderColor: "#60a5fa" },
                       }),
@@ -1019,7 +1416,9 @@ export default function StudentInfo() {
                     }}
                   />
                   {touched.class_name && form.class_name === null && (
-                    <p className="text-xs text-red-600 mt-1">Class is required.</p>
+                    <p className="text-xs text-red-600 mt-1">
+                      Class is required.
+                    </p>
                   )}
                 </div>
 
@@ -1031,15 +1430,23 @@ export default function StudentInfo() {
                   <Select
                     options={sectionOptionsForForm}
                     value={
-                      sectionOptionsForForm.find((o) => Number(o.value) === Number(form.section)) ||
-                      null
+                      sectionOptionsForForm.find(
+                        (o) => Number(o.value) === Number(form.section)
+                      ) || null
                     }
                     onChange={(opt) => {
-                      setForm((f) => ({ ...f, section: opt ? Number(opt.value) : null }));
+                      setForm((f) => ({
+                        ...f,
+                        section: opt ? Number(opt.value) : null,
+                      }));
                       setTouched((t) => ({ ...t, section: true }));
                     }}
                     onBlur={() => onBlur("section")}
-                    placeholder={form.class_name ? "Select section" : "Pick class first"}
+                    placeholder={
+                      form.class_name
+                        ? "Select section"
+                        : "Pick class first"
+                    }
                     isDisabled={!form.class_name}
                     isClearable={false}
                     classNamePrefix="rs"
@@ -1051,7 +1458,9 @@ export default function StudentInfo() {
                         borderRadius: 12,
                         paddingBlock: 2,
                         borderColor:
-                          touched.section && form.section === null ? "#ef4444" : base.borderColor,
+                          touched.section && form.section === null
+                            ? "#ef4444"
+                            : base.borderColor,
                         boxShadow: "none",
                         "&:hover": { borderColor: "#60a5fa" },
                       }),
@@ -1060,13 +1469,17 @@ export default function StudentInfo() {
                     }}
                   />
                   {touched.section && form.section === null && (
-                    <p className="text-xs text-red-600 mt-1">Section is required.</p>
+                    <p className="text-xs text-red-600 mt-1">
+                      Section is required.
+                    </p>
                   )}
                 </div>
 
                 {/* DOB */}
                 <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1">Date of Birth</label>
+                  <label className="block text-xs font-medium text-slate-600 mb-1">
+                    Date of Birth
+                  </label>
                   <input
                     type="date"
                     name="date_of_birth"
@@ -1078,7 +1491,9 @@ export default function StudentInfo() {
 
                 {/* Guardian / Contacts */}
                 <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1">Guardian Name</label>
+                  <label className="block text-xs font-medium text-slate-600 mb-1">
+                    Guardian Name
+                  </label>
                   <input
                     name="guardian_name"
                     value={form.guardian_name}
@@ -1088,7 +1503,9 @@ export default function StudentInfo() {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1">Guardian Phone</label>
+                  <label className="block text-xs font-medium text-slate-600 mb-1">
+                    Guardian Phone
+                  </label>
                   <input
                     name="guardian_phone"
                     value={form.guardian_phone}
@@ -1098,7 +1515,9 @@ export default function StudentInfo() {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1">Email</label>
+                  <label className="block text-xs font-medium text-slate-600 mb-1">
+                    Email
+                  </label>
                   <input
                     type="email"
                     name="contact_email"
@@ -1124,7 +1543,9 @@ export default function StudentInfo() {
                   )}
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1">Phone</label>
+                  <label className="block text-xs font-medium text-slate-600 mb-1">
+                    Phone
+                  </label>
                   <input
                     name="contact_phone"
                     value={form.contact_phone}
@@ -1151,7 +1572,9 @@ export default function StudentInfo() {
 
                 {/* Address */}
                 <div className="md:col-span-2">
-                  <label className="block text-xs font-medium text-slate-600 mb-1">Address</label>
+                  <label className="block text-xs font-medium text-slate-600 mb-1">
+                    Address
+                  </label>
                   <textarea
                     name="address"
                     value={form.address}
@@ -1164,7 +1587,9 @@ export default function StudentInfo() {
 
                 {/* Photo */}
                 <div className="md:col-span-2">
-                  <label className="block text-xs font-medium text-slate-600 mb-1">Photo</label>
+                  <label className="block text-xs font-medium text-slate-600 mb-1">
+                    Photo
+                  </label>
                   <div className="flex items-center gap-3">
                     <input
                       type="file"
@@ -1203,7 +1628,15 @@ export default function StudentInfo() {
                   <input
                     type="checkbox"
                     checked={createLogin}
-                    onChange={(e) => setCreateLogin(e.target.checked)}
+                    onChange={(e) => {
+                      setCreateLogin(e.target.checked);
+                      // when toggling on for a student without user, treat as new login
+                      if (e.target.checked && !form.user) {
+                        setIsNewUserForForm(true);
+                        setUserEditedUsername(false);
+                        setUserEditedPassword(false);
+                      }
+                    }}
                   />
                   <span className="text-sm font-medium">
                     Create / update login for this student
@@ -1219,7 +1652,10 @@ export default function StudentInfo() {
                       <input
                         value={userForm.username}
                         onChange={(e) => {
-                          setUserForm((u) => ({ ...u, username: e.target.value }));
+                          setUserForm((u) => ({
+                            ...u,
+                            username: e.target.value,
+                          }));
                           setUserEditedUsername(true);
                         }}
                         onBlur={() => setUserEditedUsername(true)}
@@ -1228,47 +1664,99 @@ export default function StudentInfo() {
                         required
                       />
                       <div className="mt-1 flex items-center gap-2 text-xs">
-                        {checkingUsername && <span className="text-slate-500">Checking…</span>}
-                        {usernameAvailable === true && !checkingUsername && (
-                          <span className="text-green-600">✅ Available</span>
+                        {checkingUsername && (
+                          <span className="text-slate-500">
+                            Checking…
+                          </span>
                         )}
-                        {usernameAvailable === false && !checkingUsername && (
-                          <span className="text-red-600">❌ Taken</span>
+                        {usernameAvailable === true &&
+                          !checkingUsername && (
+                            <span className="text-green-600">
+                              ✅ Available
+                            </span>
+                          )}
+                        {usernameAvailable === false &&
+                          !checkingUsername && (
+                            <span className="text-red-600">
+                              ❌ Taken
+                            </span>
+                          )}
+                        {usernameNote && (
+                          <span className="text-slate-600">
+                            • {usernameNote}
+                          </span>
                         )}
-                        {usernameNote && <span className="text-slate-600">• {usernameNote}</span>}
                       </div>
                     </div>
 
                     <div>
-                      <label className="block text-xs font-medium text-slate-600 mb-1">Email</label>
+                      <label className="block text-xs font-medium text-slate-600 mb-1">
+                        Email
+                      </label>
                       <input
                         type="email"
                         value={userForm.email || form.contact_email}
-                        onChange={(e) => setUserForm((u) => ({ ...u, email: e.target.value }))}
+                        onChange={(e) =>
+                          setUserForm((u) => ({
+                            ...u,
+                            email: e.target.value,
+                          }))
+                        }
                         className="w-full border p-2 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
                         placeholder="name@example.com"
                       />
                     </div>
                     <div>
-                      <label className="block text-xs font-medium text-slate-600 mb-1">Phone</label>
+                      <label className="block text-xs font-medium text-slate-600 mb-1">
+                        Phone
+                      </label>
                       <input
                         value={userForm.phone || form.contact_phone}
-                        onChange={(e) => setUserForm((u) => ({ ...u, phone: e.target.value }))}
+                        onChange={(e) =>
+                          setUserForm((u) => ({
+                            ...u,
+                            phone: e.target.value,
+                          }))
+                        }
                         className="w-full border p-2 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
                         placeholder="01XXXXXXXXX"
                       />
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-slate-600 mb-1">
-                        {form.user ? "New Password (optional)" : "Password (optional)"}
+                        {form.user
+                          ? "New Password (optional)"
+                          : "Password (auto-generated)"}
                       </label>
-                      <input
-                        type="password"
-                        value={userForm.password}
-                        onChange={(e) => setUserForm((u) => ({ ...u, password: e.target.value }))}
-                        className="w-full border p-2 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
-                        placeholder="••••••••"
-                      />
+                      <div className="relative">
+                        <input
+                          type={showPassword ? "text" : "password"}
+                          value={userForm.password}
+                          onChange={(e) => {
+                            setUserForm((u) => ({
+                              ...u,
+                              password: e.target.value,
+                            }));
+                            setUserEditedPassword(true);
+                          }}
+                          onBlur={() => setUserEditedPassword(true)}
+                          className="w-full border p-2 pr-10 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
+                          placeholder={
+                            isNewUserForForm
+                              ? "Auto-generated — you can change it"
+                              : "Leave blank to keep current"
+                          }
+                        />
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setShowPassword((prev) => !prev)
+                          }
+                          className="absolute inset-y-0 right-0 px-3 flex items-center text-slate-500"
+                        >
+                          {showPassword ? "🙈" : "👁️"}
+                        </button>
+                      </div>
                     </div>
                     <div className="flex items-center gap-4 md:col-span-2">
                       <label className="inline-flex items-center gap-2">
@@ -1276,7 +1764,10 @@ export default function StudentInfo() {
                           type="checkbox"
                           checked={userForm.is_active}
                           onChange={(e) =>
-                            setUserForm((u) => ({ ...u, is_active: e.target.checked }))
+                            setUserForm((u) => ({
+                              ...u,
+                              is_active: e.target.checked,
+                            }))
                           }
                         />
                         <span className="text-sm">Active</span>
@@ -1292,7 +1783,9 @@ export default function StudentInfo() {
                             }))
                           }
                         />
-                        <span className="text-sm">Must change password on first login</span>
+                        <span className="text-sm">
+                          Must change password on first login
+                        </span>
                       </label>
                     </div>
                   </>
@@ -1309,12 +1802,17 @@ export default function StudentInfo() {
                   }
                   className="w-full mt-2 bg-blue-600 text-white py-2.5 rounded-xl font-semibold hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 md:col-span-2 disabled:opacity-50"
                   title={
-                    emailState.status === "taken" || phoneState.status === "taken"
+                    emailState.status === "taken" ||
+                    phoneState.status === "taken"
                       ? "Resolve duplicate email/phone"
                       : ""
                   }
                 >
-                  {submitting ? "Saving..." : editingId ? "Update" : "Save"}
+                  {submitting
+                    ? "Saving..."
+                    : editingId
+                    ? "Update"
+                    : "Save"}
                 </button>
               </form>
             </div>
