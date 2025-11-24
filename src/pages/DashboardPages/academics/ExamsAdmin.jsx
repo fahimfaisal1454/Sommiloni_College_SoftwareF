@@ -5,12 +5,14 @@ import AxiosInstance from "../../../components/AxiosInstance";
 import { toast } from "react-hot-toast";
 
 export default function ExamsAdmin() {
-  const [years, setYears] = useState([]);
-  const [classes, setClasses] = useState([]);
+  /* --------------------- State --------------------- */
+  const [years, setYears] = useState([]); // [{value,label}]
+  const [classes, setClasses] = useState([]); // raw class objects
+
   const [form, setForm] = useState({
     year: null, // {value,label}
-    class_name: [], // [{value,label}]
-    section: [], // [{value,label,classId}]
+    class_name: [], // multi-select [{value,label}]
+    section: [], // multi-select [{value,label,classId}]
     name: "",
   });
 
@@ -18,13 +20,13 @@ export default function ExamsAdmin() {
   const [creating, setCreating] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  // Edit exam name modal
-  const [editing, setEditing] = useState(null); // {id}
+  // Edit exam name
+  const [editing, setEditing] = useState(null); // {id} | null
   const [editingName, setEditingName] = useState("");
 
-  // NEW: configure subject full-marks / components
-  const [configExam, setConfigExam] = useState(null); // full exam object
-  const [configRows, setConfigRows] = useState([]); // [{subjectId, subjectName, isPractical, isTheory, use_cq, use_mcq, use_practical, full_cq, full_mcq, full_practical}]
+  // Configure subject marks (CQ / MCQ / Practical)
+  const [configExam, setConfigExam] = useState(null); // exam object
+  const [configRows, setConfigRows] = useState([]); // [{subjectId, subjectName, isPractical, isTheory, use_cq, use_mcq, use_practical, full_cq, full_mcq, full_practical, configId?}]
   const [configLoading, setConfigLoading] = useState(false);
   const [configSaving, setConfigSaving] = useState(false);
 
@@ -37,6 +39,8 @@ export default function ExamsAdmin() {
           ? res.data.map((y) => ({ value: y, label: String(y) }))
           : [];
         setYears(serverYears);
+
+        // preselect latest year
         if (serverYears.length) {
           const latest = serverYears
             .slice()
@@ -61,9 +65,11 @@ export default function ExamsAdmin() {
         const { data } = await AxiosInstance.get("classes/", {
           params: { year: form.year.value },
         });
-        setClasses(Array.isArray(data) ? data : data?.results || []);
+        const list = Array.isArray(data) ? data : data?.results || [];
+        setClasses(list);
       } catch {
         toast.error("Failed to load classes");
+        setClasses([]);
       }
     })();
   }, [form.year]);
@@ -113,7 +119,7 @@ export default function ExamsAdmin() {
   }, [classes]);
 
   /* --------------------- Load exams (for chosen pairs) --------------------- */
-  const load = async () => {
+  const loadExams = async () => {
     if (!form.year?.value || !form.class_name.length || !form.section.length) {
       setExams([]);
       return;
@@ -122,19 +128,20 @@ export default function ExamsAdmin() {
     try {
       const collected = new Map();
       for (const cls of form.class_name) {
-        for (const sec of form.section.filter(
-          (s) => Number(s.classId) === Number(cls.value)
-        )) {
+        const clsId = Number(cls.value);
+        const secForClass = form.section.filter(
+          (s) => Number(s.classId) === clsId
+        );
+        for (const sec of secForClass) {
           const { data } = await AxiosInstance.get("exams/", {
             params: {
-              class_name: Number(cls.value),
+              class_name: clsId,
               section: Number(sec.value),
               year: form.year.value,
             },
           });
-          (Array.isArray(data) ? data : []).forEach((ex) =>
-            collected.set(ex.id, ex)
-          );
+          const list = Array.isArray(data) ? data : data?.results || [];
+          list.forEach((ex) => collected.set(ex.id, ex));
         }
       }
       setExams(Array.from(collected.values()));
@@ -145,8 +152,10 @@ export default function ExamsAdmin() {
       setLoading(false);
     }
   };
+
   useEffect(() => {
-    load();
+    loadExams();
+    // we intentionally ignore loadExams in deps
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.year, form.class_name, form.section]);
 
@@ -157,20 +166,22 @@ export default function ExamsAdmin() {
     if (!form.year?.value || !form.class_name.length || !form.section.length || !name) {
       return toast.error("Fill Year, Classes, Sections, Exam name");
     }
+
     const pairs = [];
     for (const cls of form.class_name) {
+      const clsId = Number(cls.value);
       for (const sec of form.section.filter(
-        (s) => Number(s.classId) === Number(cls.value)
+        (s) => Number(s.classId) === clsId
       )) {
-        pairs.push({ class_name: Number(cls.value), section: Number(sec.value) });
+        pairs.push({ class_name: clsId, section: Number(sec.value) });
       }
     }
     if (!pairs.length) return toast.error("No valid class–section pairs");
 
     setCreating(true);
     try {
-      let ok = 0,
-        fail = 0;
+      let ok = 0;
+      let fail = 0;
       for (const p of pairs) {
         try {
           await AxiosInstance.post("exams/", {
@@ -184,10 +195,17 @@ export default function ExamsAdmin() {
           fail++;
         }
       }
-      if (fail === 0) toast.success(`Created ${ok} exam${ok > 1 ? "s" : ""}`);
-      else toast(`Created ${ok}, failed ${fail}. Check duplicates/permissions.`);
+
+      if (fail === 0) {
+        toast.success(`Created ${ok} exam${ok > 1 ? "s" : ""}`);
+      } else {
+        toast(
+          `Created ${ok}, failed ${fail}. Check duplicates/permissions.`
+        );
+      }
+
       setForm((prev) => ({ ...prev, name: "" }));
-      await load();
+      await loadExams();
     } finally {
       setCreating(false);
     }
@@ -196,9 +214,11 @@ export default function ExamsAdmin() {
   /* --------------------- Exam actions --------------------- */
   const togglePublish = async (ex) => {
     try {
-      await AxiosInstance.patch(`exams/${ex.id}/`, { is_published: !ex.is_published });
+      await AxiosInstance.patch(`exams/${ex.id}/`, {
+        is_published: !ex.is_published,
+      });
       toast.success(!ex.is_published ? "Published" : "Unpublished");
-      await load();
+      await loadExams();
     } catch {
       toast.error("Update failed");
     }
@@ -217,7 +237,7 @@ export default function ExamsAdmin() {
       await AxiosInstance.patch(`exams/${editing.id}/`, { name });
       toast.success("Updated");
       setEditing(null);
-      await load();
+      await loadExams();
     } catch {
       toast.error("Update failed");
     }
@@ -228,13 +248,13 @@ export default function ExamsAdmin() {
     try {
       await AxiosInstance.delete(`exams/${ex.id}/`);
       toast.success("Deleted");
-      await load();
+      await loadExams();
     } catch {
       toast.error("Delete failed");
     }
   };
 
-  /* --------------------- NEW: Configure subject marks --------------------- */
+  /* --------------------- Subject marks config helpers --------------------- */
 
   const computeDefaultConfig = (exam, subject, existing) => {
     // If we already have config from backend, just map it.
@@ -245,10 +265,13 @@ export default function ExamsAdmin() {
         use_practical: existing.full_practical > 0,
         full_cq: existing.full_cq ? String(existing.full_cq) : "",
         full_mcq: existing.full_mcq ? String(existing.full_mcq) : "",
-        full_practical: existing.full_practical ? String(existing.full_practical) : "",
+        full_practical: existing.full_practical
+          ? String(existing.full_practical)
+          : "",
       };
     }
 
+    // Simple heuristic defaults based on exam name + practical flag
     const exName = String(exam?.name || "").toLowerCase();
     const isHalf = exName.includes("half");
     const isFinal = exName.includes("final") || exName.includes("annual");
@@ -271,10 +294,8 @@ export default function ExamsAdmin() {
         full_cq = "30";
         full_mcq = "20";
       } else {
-        // Bangla / English etc: 50 total theory (all CQ by default)
+        // theory only
         use_cq = true;
-        use_mcq = false;
-        use_practical = false;
         full_cq = "50";
       }
     } else if (isFinal) {
@@ -288,25 +309,21 @@ export default function ExamsAdmin() {
         full_mcq = "25";
         full_practical = "25";
       } else {
-        // English / Bangla 1st / 2nd etc: 70 CQ + 30 MCQ
+        // Bangla / English: 70 CQ + 30 MCQ
         use_cq = true;
         use_mcq = true;
-        use_practical = false;
         full_cq = "70";
         full_mcq = "30";
       }
     } else {
-      // Fallback: 100 total, theory only; if practical subject then 75+25
+      // Fallback: 100 total; if practical subject then 75+25
       if (hasPractical) {
         use_cq = true;
-        use_mcq = false;
         use_practical = true;
         full_cq = "75";
         full_practical = "25";
       } else {
         use_cq = true;
-        use_mcq = false;
-        use_practical = false;
         full_cq = "100";
       }
     }
@@ -314,10 +331,33 @@ export default function ExamsAdmin() {
     return { use_cq, use_mcq, use_practical, full_cq, full_mcq, full_practical };
   };
 
+  const totalForRow = (r) => {
+    const cq = r.use_cq ? Number(r.full_cq || 0) : 0;
+    const mcq = r.use_mcq ? Number(r.full_mcq || 0) : 0;
+    const prac = r.use_practical ? Number(r.full_practical || 0) : 0;
+    return cq + mcq + prac;
+  };
+
+  const updateConfigRow = (subjectId, patch) => {
+    setConfigRows((rows) =>
+      rows.map((r) =>
+        r.subjectId === subjectId
+          ? {
+              ...r,
+              ...patch,
+            }
+          : r
+      )
+    );
+  };
+
+  /* --------------------- Open / close config modal --------------------- */
+
   const openConfig = async (ex) => {
     setConfigExam(ex);
     setConfigRows([]);
     setConfigLoading(true);
+
     try {
       const classId = Number(ex.class_name?.id ?? ex.class_name);
       if (!classId) {
@@ -332,7 +372,7 @@ export default function ExamsAdmin() {
         ? subRes.data
         : subRes.data?.results || [];
 
-      // 2) Load existing config for this exam (if backend already has it)
+      // 2) Load existing configs for this exam
       let existing = [];
       try {
         const cfgRes = await AxiosInstance.get("exam-subject-configs/", {
@@ -342,9 +382,10 @@ export default function ExamsAdmin() {
           ? cfgRes.data
           : cfgRes.data?.results || [];
       } catch (err) {
-        // If endpoint not yet implemented, just continue with defaults
-        console.warn("exam-subject-configs GET failed (using defaults):", err);
+        console.warn("Failed to load exam-subject-configs:", err);
+        existing = [];
       }
+
       const bySubject = new Map();
       existing.forEach((c) => {
         const sid = Number(c.subject?.id ?? c.subject);
@@ -353,17 +394,18 @@ export default function ExamsAdmin() {
 
       const rows = subjects.map((s) => {
         const sid = Number(s.id);
-        const base = computeDefaultConfig(ex, s, bySubject.get(sid));
+        const existingCfg = bySubject.get(sid);
+        const base = computeDefaultConfig(ex, s, existingCfg);
         return {
           subjectId: sid,
           subjectName: s.name,
           isPractical: !!s.is_practical,
           isTheory: !!s.is_theory,
+          configId: existingCfg?.id ?? null,
           ...base,
         };
       });
 
-      // sort by subject name
       rows.sort((a, b) => a.subjectName.localeCompare(b.subjectName));
       setConfigRows(rows);
     } catch (e) {
@@ -381,47 +423,55 @@ export default function ExamsAdmin() {
     setConfigRows([]);
   };
 
-  const updateConfigRow = (subjectId, patch) => {
-    setConfigRows((rows) =>
-      rows.map((r) =>
-        r.subjectId === subjectId
-          ? {
-              ...r,
-              ...patch,
-            }
-          : r
-      )
-    );
-  };
-
-  const totalForRow = (r) => {
-    const cq = r.use_cq ? Number(r.full_cq || 0) : 0;
-    const mcq = r.use_mcq ? Number(r.full_mcq || 0) : 0;
-    const prac = r.use_practical ? Number(r.full_practical || 0) : 0;
-    return cq + mcq + prac;
-  };
-
   const saveConfig = async () => {
     if (!configExam) return;
     setConfigSaving(true);
+
     try {
-      const items = configRows
-        .filter((r) => r.use_cq || r.use_mcq || r.use_practical)
-        .map((r) => ({
+      const promises = [];
+
+      for (const r of configRows) {
+        const isAnyEnabled = r.use_cq || r.use_mcq || r.use_practical;
+
+        // If nothing enabled but we had an existing config -> delete it
+        if (!isAnyEnabled && r.configId) {
+          promises.push(
+            AxiosInstance.delete(`exam-subject-configs/${r.configId}/`).catch(
+              (e) => {
+                console.error(e);
+              }
+            )
+          );
+          continue;
+        }
+
+        if (!isAnyEnabled) continue;
+
+        const payload = {
           exam: configExam.id,
           subject: r.subjectId,
           full_cq: r.use_cq ? Number(r.full_cq || 0) : 0,
           full_mcq: r.use_mcq ? Number(r.full_mcq || 0) : 0,
           full_practical: r.use_practical ? Number(r.full_practical || 0) : 0,
-        }));
+        };
 
-      // Expectation: backend view handles bulk upsert for an exam
-      // POST body: { exam: <exam_id>, items: [...] }
-      await AxiosInstance.post("exam-subject-configs/bulk-upsert/", {
-        exam: configExam.id,
-        items,
-      });
+        if (r.configId) {
+          // update existing
+          promises.push(
+            AxiosInstance.patch(
+              `exam-subject-configs/${r.configId}/`,
+              payload
+            )
+          );
+        } else {
+          // create new
+          promises.push(
+            AxiosInstance.post("exam-subject-configs/", payload)
+          );
+        }
+      }
 
+      await Promise.all(promises);
       toast.success("Subject marks setup saved");
       closeConfig();
     } catch (e) {
@@ -453,10 +503,7 @@ export default function ExamsAdmin() {
   }, [exams]);
 
   const yearsSorted = useMemo(
-    () =>
-      Array.from(grouped.keys()).sort((a, b) =>
-        String(b).localeCompare(String(a))
-      ),
+    () => Array.from(grouped.keys()).sort((a, b) => String(b).localeCompare(String(a))),
     [grouped]
   );
 
@@ -490,7 +537,12 @@ export default function ExamsAdmin() {
               options={years}
               value={form.year}
               onChange={(val) =>
-                setForm((p) => ({ ...p, year: val, class_name: [], section: [] }))
+                setForm((p) => ({
+                  ...p,
+                  year: val,
+                  class_name: [],
+                  section: [],
+                }))
               }
               placeholder="Select year"
             />
@@ -590,7 +642,9 @@ export default function ExamsAdmin() {
                         className="rounded-lg border bg-gray-50"
                       >
                         <div className="px-3 py-2 border-b flex items-center justify-between">
-                          <div className="text-sm font-medium">{classText}</div>
+                          <div className="text-sm font-medium">
+                            {classText}
+                          </div>
                           <span className="text-xs text-gray-500">
                             {allForClass.length} item
                             {allForClass.length > 1 ? "s" : ""}
@@ -625,7 +679,9 @@ export default function ExamsAdmin() {
                                   {list
                                     .slice()
                                     .sort((a, b) =>
-                                      String(a.name).localeCompare(String(b.name))
+                                      String(a.name).localeCompare(
+                                        String(b.name)
+                                      )
                                     )
                                     .map((ex) => (
                                       <li
@@ -661,13 +717,10 @@ export default function ExamsAdmin() {
                                             Configure marks
                                           </button>
                                           <button
-                                            onClick={() => togglePublish(ex)}
-                                            className="text-xs px-2 py-1 rounded border hover:bg-gray-50"
-                                            title={
-                                              ex.is_published
-                                                ? "Unpublish"
-                                                : "Publish"
+                                            onClick={() =>
+                                              togglePublish(ex)
                                             }
+                                            className="text-xs px-2 py-1 rounded border hover:bg-gray-50"
                                           >
                                             {ex.is_published
                                               ? "Unpublish"
@@ -676,14 +729,12 @@ export default function ExamsAdmin() {
                                           <button
                                             onClick={() => openEdit(ex)}
                                             className="text-xs px-2 py-1 rounded border hover:bg-gray-50"
-                                            title="Edit"
                                           >
                                             Edit
                                           </button>
                                           <button
                                             onClick={() => removeExam(ex)}
                                             className="text-xs px-2 py-1 rounded border hover:bg-rose-50 text-rose-600"
-                                            title="Delete"
                                           >
                                             Delete
                                           </button>
@@ -749,7 +800,7 @@ export default function ExamsAdmin() {
         </div>
       )}
 
-      {/* NEW: Configure subject marks modal */}
+      {/* Subject marks config modal */}
       {configExam && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center">
           <div className="bg-white rounded-2xl shadow-xl border w-[96%] max-w-4xl max-h-[90vh] flex flex-col">
@@ -781,8 +832,8 @@ export default function ExamsAdmin() {
                 <div className="px-4 py-2 text-xs text-slate-500">
                   Tick which parts apply (CQ / MCQ / Practical) and set full
                   marks for each subject. Total will be calculated automatically.
-                  Defaults are guessed from the exam name (Half yearly / Year
-                  final) and whether the subject has practical.
+                  Defaults are guessed from the exam name and whether the subject
+                  has practical.
                 </div>
                 <div className="flex-1 overflow-auto">
                   <table className="w-full text-xs border-collapse">
@@ -790,7 +841,9 @@ export default function ExamsAdmin() {
                       <tr>
                         <th className="border px-2 py-1 text-left">Subject</th>
                         <th className="border px-2 py-1 text-center">CQ?</th>
-                        <th className="border px-2 py-1 text-center">CQ Marks</th>
+                        <th className="border px-2 py-1 text-center">
+                          CQ Marks
+                        </th>
                         <th className="border px-2 py-1 text-center">MCQ?</th>
                         <th className="border px-2 py-1 text-center">
                           MCQ Marks
