@@ -4,11 +4,12 @@ import AxiosInstance from "../../components/AxiosInstance";
 import { toast, Toaster } from "react-hot-toast";
 
 export default function EnterMarks() {
-  // dropdown data (scoped to this teacher)
-  const [classes, setClasses] = useState([]);     // [{id,name}]
-  const [sections, setSections] = useState([]);   // [{id,name}]
-  const [subjects, setSubjects] = useState([]);   // [{id,name}]
-  const [exams, setExams] = useState([]);         // [{id,name,...}]
+  // dropdown options derived from teacher timetable
+  const [teachRows, setTeachRows] = useState([]);
+  const [classes, setClasses] = useState([]);
+  const [sections, setSections] = useState([]);
+  const [subjects, setSubjects] = useState([]);
+  const [exams, setExams] = useState([]);
 
   // selections
   const [classId, setClassId] = useState("");
@@ -16,115 +17,149 @@ export default function EnterMarks() {
   const [subjectId, setSubjectId] = useState("");
   const [examId, setExamId] = useState("");
 
-  // teacher timetable rows (normalized)
-  const [teachRows, setTeachRows] = useState([]);
-
-  // students
+  // students in class/section
   const [students, setStudents] = useState([]);
   const [loadingStudents, setLoadingStudents] = useState(false);
 
-  // marks being typed: { [studentId]: { cq: "", mcq: "", practical: "" } }
-  const [marks, setMarks] = useState({});
-
-  // existing (saved) marks from server (locks row)
-  // { [studentId]: { cq: number|null, mcq: number|null, practical: number|null } }
-  const [existingMarks, setExistingMarks] = useState({});
-
-  // last saved info (for small modal)
-  const [lastSavedRows, setLastSavedRows] = useState([]);
-  const [showSavedModal, setShowSavedModal] = useState(false);
-
-  // re-fetch trigger for marks
-  const [refreshKey, setRefreshKey] = useState(0);
-
-  // exam+subject full-mark configuration from admin
-  // { full_cq, full_mcq, full_practical, total }
-  const [config, setConfig] = useState(null);
+  // admin full-marks config for this exam+subject
+  const [config, setConfig] = useState(null); // { full_cq, full_mcq, full_practical, total }
   const [loadingConfig, setLoadingConfig] = useState(false);
 
+  // marks typed in UI: { [studentId]: { cq: "", mcq: "", practical: "" } }
+  const [marks, setMarks] = useState({});
+
+  // existing saved marks from backend:
+  // { [studentId]: { id, cq, mcq, practical, total, letter, gpa } }
+  const [existingMarks, setExistingMarks] = useState({});
+
   // ───────────────────────────────────────────────────────────
-  // 1) Load teacher timetable (classes/sections/subjects)
+  // Helpers
+  // ───────────────────────────────────────────────────────────
+  const currentClass = useMemo(
+    () => classes.find((c) => String(c.id) === String(classId)),
+    [classes, classId]
+  );
+  const currentSection = useMemo(
+    () => sections.find((s) => String(s.id) === String(sectionId)),
+    [sections, sectionId]
+  );
+  const currentSubject = useMemo(
+    () => subjects.find((s) => String(s.id) === String(subjectId)),
+    [subjects, subjectId]
+  );
+  const currentExam = useMemo(
+    () => exams.find((e) => String(e.id) === String(examId)),
+    [exams, examId]
+  );
+
+  const hasCQ = config && config.full_cq > 0;
+  const hasMCQ = config && config.full_mcq > 0;
+  const hasPractical = config && config.full_practical > 0;
+
+  const fullMarksText = useMemo(() => {
+    if (!config) return "Full marks not configured for this exam & subject.";
+    const parts = [];
+    if (hasCQ) parts.push(`CQ ${config.full_cq}`);
+    if (hasMCQ) parts.push(`MCQ ${config.full_mcq}`);
+    if (hasPractical) parts.push(`Prac ${config.full_practical}`);
+    return `Total ${config.total} (${parts.join(" + ")})`;
+  }, [config, hasCQ, hasMCQ, hasPractical]);
+
+  const computeRowTotal = (m) => {
+    if (!m) return "";
+    const cq = hasCQ ? Number(m.cq || 0) : 0;
+    const mcq = hasMCQ ? Number(m.mcq || 0) : 0;
+    const prac = hasPractical ? Number(m.practical || 0) : 0;
+    const total = cq + mcq + prac;
+    return total ? total : "";
+  };
+
+  const handlePartChange = (studentId, part, value) => {
+    const raw = value === "" ? "" : Number(value);
+    if (raw === "") {
+      setMarks((prev) => ({
+        ...prev,
+        [studentId]: { ...(prev[studentId] || {}), [part]: "" },
+      }));
+      return;
+    }
+
+    let max = null;
+    if (part === "cq" && hasCQ) max = config.full_cq;
+    if (part === "mcq" && hasMCQ) max = config.full_mcq;
+    if (part === "practical" && hasPractical) max = config.full_practical;
+
+    let val = isNaN(raw) ? "" : raw;
+    if (max != null && val > max) val = max;
+    if (val < 0) val = 0;
+
+    setMarks((prev) => ({
+      ...prev,
+      [studentId]: { ...(prev[studentId] || {}), [part]: String(val) },
+    }));
+  };
+
+  // ───────────────────────────────────────────────────────────
+  // 1) Load teacher timetable to know which class/section/subject they teach
   // ───────────────────────────────────────────────────────────
   useEffect(() => {
-    let cancelled = false;
-
-    const normalize = (rows) =>
-      rows
-        .map((r) => {
-          const classId   = r.class_name_id ?? r.class_id ?? r.class_name ?? r.class;
-          const className = r.class_name_label || r.class_name || r.class_label || String(classId || "");
-          const sectionId   = r.section_id ?? r.section;
-          const sectionName = r.section_label || r.section || String(sectionId || "");
-          const subjectId   = r.subject_id ?? r.subject;
-          const subjectName = r.subject_label || r.subject || String(subjectId || "");
-          if (classId == null || sectionId == null || subjectId == null) return null;
-          return {
-            classId: String(classId),
-            className: String(className || classId),
-            sectionId: String(sectionId),
-            sectionName: String(sectionName || sectionId),
-            subjectId: String(subjectId),
-            subjectName: String(subjectName || subjectId),
-          };
-        })
-        .filter(Boolean);
-
     (async () => {
       try {
-        const res = await AxiosInstance.get("timetable/", { params: { user: "me" } });
-        const rows = Array.isArray(res.data) ? res.data : res.data?.results || [];
-        if (!cancelled) setTeachRows(normalize(rows));
+        const res = await AxiosInstance.get("timetable/", {
+          params: { user: "me" },
+        });
+        const data = Array.isArray(res.data) ? res.data : res.data?.results || [];
+
+        const normalized = data
+          .map((r) => {
+            const clsId = r.class_name_id ?? r.class_name ?? r.class_id;
+            const clsName =
+              r.class_name_label || r.class_name || r.class_label || String(clsId || "");
+            const secId = r.section_id ?? r.section;
+            const secName = r.section_label || r.section || String(secId || "");
+            const subId = r.subject_id ?? r.subject;
+            const subName = r.subject_label || r.subject || String(subId || "");
+            if (!clsId || !secId || !subId) return null;
+            return {
+              classId: String(clsId),
+              className: String(clsName),
+              sectionId: String(secId),
+              sectionName: String(secName),
+              subjectId: String(subId),
+              subjectName: String(subName),
+            };
+          })
+          .filter(Boolean);
+
+        setTeachRows(normalized);
       } catch (err) {
         console.error(err);
-        if (!cancelled) {
-          setTeachRows([]);
-          toast.error("Couldn't load your teaching assignments.");
-        }
+        toast.error("Failed to load your timetable.");
       }
     })();
-
-    return () => {
-      cancelled = true;
-    };
   }, []);
 
-  // ───────────────────────────────────────────────────────────
-  // 2) Classes from timetable
-  // ───────────────────────────────────────────────────────────
+  // 2) Classes available from timetable
   useEffect(() => {
     const byClass = new Map();
     for (const r of teachRows) {
       if (!byClass.has(r.classId)) byClass.set(r.classId, r.className);
     }
-    const list = Array.from(byClass.entries()).map(([id, name]) => ({ id, name }));
-    list.sort((a, b) => String(a.name).localeCompare(String(b.name)));
-    setClasses(list);
+    const cls = Array.from(byClass.entries()).map(([id, name]) => ({ id, name }));
+    cls.sort((a, b) => String(a.name).localeCompare(String(b.name)));
+    setClasses(cls);
+  }, [teachRows]);
 
-    // reset invalid selection
-    if (classId && !byClass.has(String(classId))) {
-      setClassId("");
-      setSectionId("");
-      setSubjectId("");
-      setExamId("");
-      setStudents([]);
-      setMarks({});
-      setExistingMarks({});
-      setConfig(null);
-    }
-  }, [teachRows]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // ───────────────────────────────────────────────────────────
   // 3) Sections when class changes
-  // ───────────────────────────────────────────────────────────
   useEffect(() => {
     const bySec = new Map();
     for (const r of teachRows) {
       if (String(r.classId) !== String(classId)) continue;
       if (!bySec.has(r.sectionId)) bySec.set(r.sectionId, r.sectionName);
     }
-    const list = Array.from(bySec.entries()).map(([id, name]) => ({ id, name }));
-    list.sort((a, b) => String(a.name).localeCompare(String(b.name)));
-    setSections(list);
+    const secs = Array.from(bySec.entries()).map(([id, name]) => ({ id, name }));
+    secs.sort((a, b) => String(a.name).localeCompare(String(b.name)));
+    setSections(secs);
 
     setSectionId("");
     setSubjectId("");
@@ -135,9 +170,7 @@ export default function EnterMarks() {
     setConfig(null);
   }, [classId, teachRows]);
 
-  // ───────────────────────────────────────────────────────────
   // 4) Subjects when section changes
-  // ───────────────────────────────────────────────────────────
   useEffect(() => {
     const bySub = new Map();
     for (const r of teachRows) {
@@ -145,9 +178,9 @@ export default function EnterMarks() {
       if (String(r.sectionId) !== String(sectionId)) continue;
       if (!bySub.has(r.subjectId)) bySub.set(r.subjectId, r.subjectName);
     }
-    const list = Array.from(bySub.entries()).map(([id, name]) => ({ id, name }));
-    list.sort((a, b) => String(a.name).localeCompare(String(b.name)));
-    setSubjects(list);
+    const subs = Array.from(bySub.entries()).map(([id, name]) => ({ id, name }));
+    subs.sort((a, b) => String(a.name).localeCompare(String(b.name)));
+    setSubjects(subs);
 
     setSubjectId("");
     setExamId("");
@@ -156,37 +189,28 @@ export default function EnterMarks() {
     setConfig(null);
   }, [classId, sectionId, teachRows]);
 
-  // ───────────────────────────────────────────────────────────
-  // 5) Exams for selected class+section
-  // ───────────────────────────────────────────────────────────
+  // 5) Load exams for selected class+section
   useEffect(() => {
-    let cancelled = false;
     (async () => {
       if (!classId || !sectionId) {
         setExams([]);
         return;
       }
       try {
-        const { data } = await AxiosInstance.get("exams/", {
+        const res = await AxiosInstance.get("exams/", {
           params: { class_name: classId, section: sectionId },
         });
-        const list = Array.isArray(data) ? data : data?.results || [];
-        if (!cancelled) setExams(list);
+        const list = Array.isArray(res.data) ? res.data : res.data?.results || [];
+        setExams(list);
       } catch (err) {
         console.error(err);
-        if (!cancelled) setExams([]);
+        setExams([]);
       }
     })();
-    return () => {
-      cancelled = true;
-    };
   }, [classId, sectionId]);
 
-  // ───────────────────────────────────────────────────────────
-  // 6) Load students in this class+section
-  // ───────────────────────────────────────────────────────────
+  // 6) Load students for selected class+section
   useEffect(() => {
-    let cancelled = false;
     (async () => {
       if (!classId || !sectionId) {
         setStudents([]);
@@ -196,77 +220,23 @@ export default function EnterMarks() {
       }
       setLoadingStudents(true);
       try {
-        const { data } = await AxiosInstance.get("students/", {
+        const res = await AxiosInstance.get("students/", {
           params: { class_id: classId, section_id: sectionId },
         });
-        const rows = Array.isArray(data) ? data : data?.results || [];
-        if (!cancelled) {
-          setStudents(rows);
-          setMarks((prev) => {
-            const next = {};
-            for (const s of rows) {
-              if (prev[s.id]) next[s.id] = prev[s.id];
-            }
-            return next;
-          });
-        }
+        const list = Array.isArray(res.data) ? res.data : res.data?.results || [];
+        setStudents(list);
       } catch (err) {
         console.error(err);
-        if (!cancelled) {
-          setStudents([]);
-          setMarks({});
-          setExistingMarks({});
-          toast.error("Failed to load students.");
-        }
+        toast.error("Failed to load students.");
+        setStudents([]);
       } finally {
-        if (!cancelled) setLoadingStudents(false);
+        setLoadingStudents(false);
       }
     })();
-    return () => {
-      cancelled = true;
-    };
   }, [classId, sectionId]);
 
-  // ───────────────────────────────────────────────────────────
-  // 7) Existing marks (lock rows) for selected exam+subject
-  // ───────────────────────────────────────────────────────────
+  // 7) Load admin config for this exam+subject
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      if (!examId || !subjectId) {
-        setExistingMarks({});
-        return;
-      }
-      try {
-        const res = await AxiosInstance.get("exam-marks/", {
-          params: { exam: examId, subject: subjectId },
-        });
-        const arr = Array.isArray(res.data) ? res.data : res.data?.results || [];
-        const map = {};
-        for (const m of arr) {
-          const sid = m.student;
-          map[sid] = {
-            cq: m.score_cq ?? null,
-            mcq: m.score_mcq ?? null,
-            practical: m.score_practical ?? null,
-          };
-        }
-        if (!cancelled) setExistingMarks(map);
-      } catch (err) {
-        console.warn("Failed to load existing marks", err);
-        if (!cancelled) setExistingMarks({});
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [examId, subjectId, refreshKey]);
-
-  // ───────────────────────────────────────────────────────────
-  // 8) Load full-marks config for exam+subject from admin
-  // ───────────────────────────────────────────────────────────
-  useEffect(() => {
-    let cancelled = false;
     (async () => {
       if (!examId || !subjectId) {
         setConfig(null);
@@ -280,105 +250,73 @@ export default function EnterMarks() {
         const arr = Array.isArray(res.data) ? res.data : res.data?.results || [];
         const cfg = arr[0];
         if (!cfg) {
-          if (!cancelled) setConfig(null);
-          return;
+          setConfig(null);
+        } else {
+          const full_cq = Number(cfg.full_cq || 0);
+          const full_mcq = Number(cfg.full_mcq || 0);
+          const full_practical = Number(cfg.full_practical || 0);
+          setConfig({
+            full_cq,
+            full_mcq,
+            full_practical,
+            total: full_cq + full_mcq + full_practical,
+          });
         }
-        const full_cq = Number(cfg.full_cq || 0);
-        const full_mcq = Number(cfg.full_mcq || 0);
-        const full_practical = Number(cfg.full_practical || 0);
-        const total = full_cq + full_mcq + full_practical;
-        if (!cancelled) setConfig({ full_cq, full_mcq, full_practical, total });
       } catch (err) {
-        console.warn("Failed to load exam-subject config", err);
-        if (!cancelled) setConfig(null);
+        console.error(err);
+        setConfig(null);
       } finally {
-        if (!cancelled) setLoadingConfig(false);
+        setLoadingConfig(false);
       }
     })();
-    return () => {
-      cancelled = true;
-    };
+  }, [examId, subjectId]);
+
+  // 8) Load existing marks for exam+subject and prefill inputs
+  useEffect(() => {
+    (async () => {
+      if (!examId || !subjectId) {
+        setExistingMarks({});
+        return;
+      }
+      try {
+        const res = await AxiosInstance.get("exam-marks/", {
+          params: { exam: examId, subject: subjectId },
+        });
+        const arr = Array.isArray(res.data) ? res.data : res.data?.results || [];
+        const map = {};
+        const initial = {};
+        arr.forEach((m) => {
+          const sid = m.student;
+          map[sid] = {
+            id: m.id,
+            cq: m.score_cq,
+            mcq: m.score_mcq,
+            practical: m.score_practical,
+            total: m.score,
+            letter: m.letter,
+            gpa: m.gpa,
+          };
+          initial[sid] = {
+            cq: m.score_cq != null ? String(m.score_cq) : "",
+            mcq: m.score_mcq != null ? String(m.score_mcq) : "",
+            practical: m.score_practical != null ? String(m.score_practical) : "",
+          };
+        });
+        setExistingMarks(map);
+        setMarks((prev) => ({ ...prev, ...initial }));
+      } catch (err) {
+        console.error(err);
+        setExistingMarks({});
+      }
+    })();
   }, [examId, subjectId]);
 
   // ───────────────────────────────────────────────────────────
-  // Helpers / derived data
+  // Save marks
   // ───────────────────────────────────────────────────────────
-  const currentClassName = useMemo(
-    () => classes.find((c) => String(c.id) === String(classId))?.name || "",
-    [classes, classId]
-  );
-  const currentSectionName = useMemo(
-    () => sections.find((s) => String(s.id) === String(sectionId))?.name || "",
-    [sections, sectionId]
-  );
-  const currentSubjectName = useMemo(
-    () => subjects.find((s) => String(s.id) === String(subjectId))?.name || "",
-    [subjects, subjectId]
-  );
-  const currentExamName = useMemo(
-    () => exams.find((e) => String(e.id) === String(examId))?.name || "",
-    [exams, examId]
-  );
-
-  const hasCQ = !!(config && config.full_cq > 0);
-  const hasMCQ = !!(config && config.full_mcq > 0);
-  const hasPractical = !!(config && config.full_practical > 0);
-
-  const fullMarksText = useMemo(() => {
-    if (!config) return "Full marks not configured for this exam & subject.";
-    const parts = [];
-    if (hasCQ) parts.push(`CQ ${config.full_cq}`);
-    if (hasMCQ) parts.push(`MCQ ${config.full_mcq}`);
-    if (hasPractical) parts.push(`Practical ${config.full_practical}`);
-    if (!parts.length) return "Full marks not configured for this exam & subject.";
-    return `Full marks: ${config.total} (${parts.join(" + ")})`;
-  }, [config, hasCQ, hasMCQ, hasPractical]);
-
-  const clamp = (value, max) => {
-    let n = Number(value);
-    if (Number.isNaN(n)) return "";
-    if (n < 0) n = 0;
-    if (max != null && max > 0 && n > max) n = max;
-    return String(n);
-  };
-
-  const setPartMark = (studentId, part, value) => {
-    const raw = (value ?? "").toString().trim();
-    if (raw === "") {
-      setMarks((prev) => ({
-        ...prev,
-        [studentId]: { ...(prev[studentId] || {}), [part]: "" },
-      }));
-      return;
-    }
-    let max = null;
-    if (part === "cq" && hasCQ) max = config.full_cq;
-    if (part === "mcq" && hasMCQ) max = config.full_mcq;
-    if (part === "practical" && hasPractical) max = config.full_practical;
-
-    const val = clamp(raw, max);
-    if (val === "") return;
-
-    setMarks((prev) => ({
-      ...prev,
-      [studentId]: { ...(prev[studentId] || {}), [part]: val },
-    }));
-  };
-
-  const isRowLocked = (sid) => existingMarks[sid] != null;
-
-  const doRefreshMarks = () => setRefreshKey((k) => k + 1);
-
-  // ───────────────────────────────────────────────────────────
-  // Save marks (CQ / MCQ / Practical)
-  // ───────────────────────────────────────────────────────────
-  const saveAll = async () => {
-    if (!classId || !sectionId || !subjectId) {
-      toast.error("Pick class, section and subject.");
-      return;
-    }
-    if (!examId) {
-      toast.error("Pick an exam.");
+  const handleSave = async () => {
+    if (!classId || !sectionId || !subjectId || !examId) {
+      toast.error("Please select class, section, subject and exam.");
       return;
     }
     if (!config) {
@@ -386,31 +324,37 @@ export default function EnterMarks() {
       return;
     }
 
-    // Prepare payloads only for rows that are not locked and have some mark
-    const toSave = students
-      .filter((s) => !isRowLocked(s.id))
-      .map((s) => {
-        const row = marks[s.id] || {};
-        const cq = hasCQ && row.cq !== "" ? Number(row.cq) : null;
-        const mcq = hasMCQ && row.mcq !== "" ? Number(row.mcq) : null;
-        const practical = hasPractical && row.practical !== "" ? Number(row.practical) : null;
-        if (cq == null && mcq == null && practical == null) return null;
-        const total =
-          (cq || 0) +
-          (mcq || 0) +
-          (practical || 0);
-        return {
-          studentId: s.id,
-          cq,
-          mcq,
-          practical,
-          total,
-        };
-      })
-      .filter(Boolean);
+    const payloads = students.map((stu) => {
+      const m = marks[stu.id] || {};
+      const cq = hasCQ && m.cq !== "" ? Number(m.cq) : null;
+      const mcq = hasMCQ && m.mcq !== "" ? Number(m.mcq) : null;
+      const prac = hasPractical && m.practical !== "" ? Number(m.practical) : null;
 
-    if (!toSave.length) {
-      toast("Nothing to save (either all empty or already saved).");
+      if (cq === null && mcq === null && prac === null) return null;
+
+      // clamp once more on send
+      const safe = (val, max) => {
+        if (val == null || isNaN(val)) return null;
+        if (val < 0) return 0;
+        if (max != null && val > max) return max;
+        return val;
+      };
+
+      return {
+        studentId: stu.id,
+        body: {
+          exam: Number(examId),
+          student: Number(stu.id),
+          subject: Number(subjectId),
+          score_cq: safe(cq, config.full_cq),
+          score_mcq: safe(mcq, config.full_mcq),
+          score_practical: safe(prac, config.full_practical),
+        },
+      };
+    }).filter(Boolean);
+
+    if (!payloads.length) {
+      toast("Nothing to save.");
       return;
     }
 
@@ -418,70 +362,51 @@ export default function EnterMarks() {
     let ok = 0;
     let fail = 0;
 
-    for (const row of toSave) {
-      const base = {
-        exam: Number(examId),
-        student: Number(row.studentId),
-        subject: Number(subjectId),
-      };
-      const payload = {
-        ...base,
-        score_cq: row.cq,
-        score_mcq: row.mcq,
-        score_practical: row.practical,
-        score: row.total,
-      };
-
+    for (const item of payloads) {
+      const existing = existingMarks[item.studentId];
       try {
-        await AxiosInstance.post("exam-marks/", payload);
+        if (existing?.id) {
+          await AxiosInstance.patch(`exam-marks/${existing.id}/`, item.body);
+        } else {
+          await AxiosInstance.post("exam-marks/", item.body);
+        }
         ok++;
       } catch (err) {
-        // if already exists, PATCH
-        try {
-          const res = await AxiosInstance.get("exam-marks/", { params: base });
-          const id =
-            (Array.isArray(res.data) ? res.data[0]?.id : res.data?.results?.[0]?.id) || null;
-          if (id) {
-            await AxiosInstance.patch(`exam-marks/${id}/`, payload);
-            ok++;
-          } else {
-            fail++;
-          }
-        } catch (e2) {
-          console.error(e2);
-          fail++;
-        }
+        console.error(err);
+        fail++;
       }
     }
 
     toast.dismiss(toastId);
-
-    // track last saved rows
-    const savedRows = toSave.map((row) => {
-      const stu = students.find((s) => s.id === row.studentId);
-      return {
-        sid: row.studentId,
-        name: stu?.full_name || `Student ${row.studentId}`,
-        roll: stu?.roll_number ?? "—",
-        score: row.total,
-        cq: row.cq,
-        mcq: row.mcq,
-        practical: row.practical,
-        subjectName: currentSubjectName || "—",
-        examName: currentExamName || "—",
-      };
-    });
-    setLastSavedRows(savedRows);
-    setMarks({});
-
     if (fail) {
       toast(`Saved ${ok}, failed ${fail}.`, { duration: 5000 });
     } else {
       toast.success(`Saved ${ok} marks.`, { duration: 4000 });
     }
 
-    // refresh existing marks so rows become locked
-    doRefreshMarks();
+    // reload existing marks so letter/GPA updates and rows stay in sync
+    try {
+      const res = await AxiosInstance.get("exam-marks/", {
+        params: { exam: examId, subject: subjectId },
+      });
+      const arr = Array.isArray(res.data) ? res.data : res.data?.results || [];
+      const map = {};
+      arr.forEach((m) => {
+        const sid = m.student;
+        map[sid] = {
+          id: m.id,
+          cq: m.score_cq,
+          mcq: m.score_mcq,
+          practical: m.score_practical,
+          total: m.score,
+          letter: m.letter,
+          gpa: m.gpa,
+        };
+      });
+      setExistingMarks(map);
+    } catch (err) {
+      console.error(err);
+    }
   };
 
   // ───────────────────────────────────────────────────────────
@@ -491,7 +416,7 @@ export default function EnterMarks() {
     <div className="space-y-6">
       <Toaster position="top-right" />
 
-      <h1 className="text-xl font-bold">Enter Marks</h1>
+      <h1 className="text-xl font-bold">Enter Exam Marks</h1>
 
       {/* Filters */}
       <div className="bg-white border rounded-md p-4 space-y-3">
@@ -568,310 +493,190 @@ export default function EnterMarks() {
           </div>
         </div>
 
-        <div className="flex items-center justify-between text-xs text-slate-600">
-          <div className="space-y-0.5">
-            {currentClassName && currentSectionName && (
-              <div>
-                Selected: <b>{currentClassName}</b> / <b>{currentSectionName}</b>
-                {currentSubjectName ? (
-                  <>
-                    {" "}
-                    / <b>{currentSubjectName}</b>
-                  </>
-                ) : null}
-                {currentExamName ? (
-                  <>
-                    {" "}
-                    / <b>{currentExamName}</b>
-                  </>
-                ) : null}
-              </div>
-            )}
-            {examId && subjectId && (
-              <div className="text-[11px] text-slate-500">
-                {loadingConfig
-                  ? "Loading full marks configuration…"
-                  : fullMarksText}
-              </div>
-            )}
-          </div>
-
-          <button
-            onClick={doRefreshMarks}
-            className="px-3 py-1.5 text-xs rounded border bg-white hover:bg-slate-50"
-            disabled={!examId || !subjectId}
-          >
-            Refresh marks
-          </button>
+        <div className="text-xs text-slate-600 mt-1">
+          {currentClass && currentSection && (
+            <>
+              Class <b>{currentClass.name}</b>, Section{" "}
+              <b>{currentSection.name}</b>
+            </>
+          )}
+          {currentSubject && (
+            <>
+              {" "}
+              | Subject: <b>{currentSubject.name}</b>
+            </>
+          )}
+          {currentExam && (
+            <>
+              {" "}
+              | Exam: <b>{currentExam.name}</b>
+            </>
+          )}
+          {examId && subjectId && (
+            <div className="text-[11px] text-slate-500">
+              {loadingConfig ? "Loading full marks…" : fullMarksText}
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Students + entry */}
-      <div className="bg-white border rounded-md overflow-hidden">
-        <div className="px-4 py-2 text-sm font-semibold bg-slate-50 border-b flex items-center justify-between">
-          <div>
-            Students {loadingStudents ? "(loading…)" : `(${students.length})`}
+      {/* Marks table – layout to mimic your screenshot */}
+      <div className="bg-white border rounded-md p-4 overflow-x-auto">
+        {(!classId || !sectionId || !subjectId || !examId) && (
+          <div className="text-sm text-slate-500">
+            Select class, section, subject and exam to enter marks.
           </div>
-          <button
-            onClick={() => setShowSavedModal(true)}
-            disabled={!lastSavedRows.length}
-            className="px-3 py-1.5 text-sm rounded border bg-white hover:bg-slate-50 disabled:opacity-60"
-          >
-            View saved marks{lastSavedRows.length ? ` (${lastSavedRows.length})` : ""}
-          </button>
-        </div>
-
-        {(!classId || !sectionId) && (
-          <div className="p-4 text-sm text-slate-500">
-            Pick class and section to load students.
-          </div>
-        )}
-
-        {classId && sectionId && !loadingStudents && students.length === 0 && (
-          <div className="p-4 text-sm text-slate-500">No students found.</div>
         )}
 
         {classId &&
           sectionId &&
+          subjectId &&
+          examId &&
           !loadingStudents &&
+          students.length === 0 && (
+            <div className="text-sm text-slate-500">No students found.</div>
+          )}
+
+        {classId &&
+          sectionId &&
+          subjectId &&
+          examId &&
           students.length > 0 && (
             <>
-              {/* Header row */}
-              <div className="grid grid-cols-7 gap-3 px-4 py-2 text-xs font-medium text-slate-600 border-b bg-slate-50">
-                <div>#</div>
-                <div>Name</div>
-                <div>Roll</div>
-                <div>Subject</div>
-                <div>Exam</div>
-                <div className="flex flex-wrap gap-2">
-                  {hasCQ && <span>CQ</span>}
-                  {hasMCQ && <span>MCQ</span>}
-                  {hasPractical && <span>Practical</span>}
-                  {!config && <span>Marks</span>}
-                </div>
-                <div className="text-center">Status</div>
-              </div>
+              <table className="w-full border border-black text-xs">
+                <thead>
+                  {/* Title row like: Year Final */}
+                  <tr>
+                    <th
+                      colSpan={11}
+                      className="border border-black text-center py-2 text-sm font-semibold"
+                    >
+                      {currentExam?.name || "Exam"}
+                    </th>
+                  </tr>
+                  {/* Header row like screenshot */}
+                  <tr className="bg-gray-50">
+                    <th className="border border-black px-2 py-1">No</th>
+                    <th className="border border-black px-2 py-1">Name</th>
+                    <th className="border border-black px-2 py-1">Roll</th>
+                    <th className="border border-black px-2 py-1">Sub</th>
+                    <th className="border border-black px-2 py-1">CQ</th>
+                    <th className="border border-black px-2 py-1">MCQ</th>
+                    <th className="border border-black px-2 py-1">Prac</th>
+                    <th className="border border-black px-2 py-1">
+                      Total mark
+                    </th>
+                    <th className="border border-black px-2 py-1">
+                      Obtain mark
+                    </th>
+                    <th className="border border-black px-2 py-1">Letter</th>
+                    <th className="border border-black px-2 py-1">GPA</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {students.map((stu, index) => {
+                    const rowMarks = marks[stu.id] || {};
+                    const existing = existingMarks[stu.id];
 
-              {/* Student rows */}
-              {students.map((s, index) => {
-                const locked = isRowLocked(s.id);
-                const typed = marks[s.id] || {};
-                const saved = existingMarks[s.id] || {};
+                    const obtain =
+                      existing?.total != null
+                        ? existing.total
+                        : computeRowTotal(rowMarks);
 
-                const cqVal = locked
-                  ? saved.cq ?? ""
-                  : typed.cq ?? "";
-                const mcqVal = locked
-                  ? saved.mcq ?? ""
-                  : typed.mcq ?? "";
-                const pracVal = locked
-                  ? saved.practical ?? ""
-                  : typed.practical ?? "";
-
-                const maxCq = hasCQ ? config.full_cq : undefined;
-                const maxMcq = hasMCQ ? config.full_mcq : undefined;
-                const maxPrac = hasPractical ? config.full_practical : undefined;
-
-                return (
-                  <div
-                    key={s.id}
-                    className="grid grid-cols-7 gap-3 px-4 py-2 text-sm border-b last:border-b-0"
-                  >
-                    <div>{index + 1}</div>
-                    <div>{s.full_name}</div>
-                    <div>{s.roll_number ?? "—"}</div>
-                    <div>{currentSubjectName || "—"}</div>
-                    <div>{currentExamName || "—"}</div>
-                    <div className="flex flex-wrap gap-2 items-center">
-                      {hasCQ && (
-                        <div className="flex items-center gap-1">
-                          <span className="text-[11px] text-slate-500">
-                            CQ
-                          </span>
+                    return (
+                      <tr key={stu.id}>
+                        <td className="border border-black px-2 py-1 text-center">
+                          {index + 1}
+                        </td>
+                        <td className="border border-black px-2 py-1">
+                          {stu.full_name || `${stu.first_name} ${stu.last_name}`}
+                        </td>
+                        <td className="border border-black px-2 py-1 text-center">
+                          {stu.roll_number ?? ""}
+                        </td>
+                        <td className="border border-black px-2 py-1 text-center">
+                          {currentSubject?.name || ""}
+                        </td>
+                        {/* CQ */}
+                        <td className="border border-black px-2 py-1 text-center">
                           <input
                             type="number"
                             min={0}
-                            max={maxCq}
-                            value={cqVal}
+                            max={config?.full_cq ?? undefined}
+                            value={rowMarks.cq ?? ""}
                             onChange={(e) =>
-                              setPartMark(s.id, "cq", e.target.value)
+                              handlePartChange(stu.id, "cq", e.target.value)
                             }
-                            disabled={!subjectId || !examId || locked}
-                            className={`w-16 border rounded px-1 py-0.5 text-xs ${
-                              locked
-                                ? "bg-slate-100 text-slate-600 cursor-not-allowed"
-                                : ""
-                            }`}
-                            placeholder={maxCq ? `0–${maxCq}` : "CQ"}
+                            disabled={!hasCQ}
+                            className="w-16 border px-1 py-0.5 text-xs bg-blue-50"
                           />
-                        </div>
-                      )}
-                      {hasMCQ && (
-                        <div className="flex items-center gap-1">
-                          <span className="text-[11px] text-slate-500">
-                            MCQ
-                          </span>
+                        </td>
+                        {/* MCQ */}
+                        <td className="border border-black px-2 py-1 text-center">
                           <input
                             type="number"
                             min={0}
-                            max={maxMcq}
-                            value={mcqVal}
+                            max={config?.full_mcq ?? undefined}
+                            value={rowMarks.mcq ?? ""}
                             onChange={(e) =>
-                              setPartMark(s.id, "mcq", e.target.value)
+                              handlePartChange(stu.id, "mcq", e.target.value)
                             }
-                            disabled={!subjectId || !examId || locked}
-                            className={`w-16 border rounded px-1 py-0.5 text-xs ${
-                              locked
-                                ? "bg-slate-100 text-slate-600 cursor-not-allowed"
-                                : ""
-                            }`}
-                            placeholder={maxMcq ? `0–${maxMcq}` : "MCQ"}
+                            disabled={!hasMCQ}
+                            className="w-16 border px-1 py-0.5 text-xs bg-blue-50"
                           />
-                        </div>
-                      )}
-                      {hasPractical && (
-                        <div className="flex items-center gap-1">
-                          <span className="text-[11px] text-slate-500">
-                            Prac
-                          </span>
+                        </td>
+                        {/* Practical */}
+                        <td className="border border-black px-2 py-1 text-center">
                           <input
                             type="number"
                             min={0}
-                            max={maxPrac}
-                            value={pracVal}
+                            max={config?.full_practical ?? undefined}
+                            value={rowMarks.practical ?? ""}
                             onChange={(e) =>
-                              setPartMark(s.id, "practical", e.target.value)
+                              handlePartChange(
+                                stu.id,
+                                "practical",
+                                e.target.value
+                              )
                             }
-                            disabled={!subjectId || !examId || locked}
-                            className={`w-16 border rounded px-1 py-0.5 text-xs ${
-                              locked
-                                ? "bg-slate-100 text-slate-600 cursor-not-allowed"
-                                : ""
-                            }`}
-                            placeholder={maxPrac ? `0–${maxPrac}` : "Prac"}
+                            disabled={!hasPractical}
+                            className="w-16 border px-1 py-0.5 text-xs bg-blue-50"
                           />
-                        </div>
-                      )}
-                      {!config && (
-                        <span className="text-[11px] text-rose-500">
-                          No config
-                        </span>
-                      )}
-                      {locked && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-200 text-slate-700 border border-slate-300">
-                          🔒
-                        </span>
-                      )}
-                    </div>
-                    <div className="text-center">
-                      {locked ? (
-                        <span className="text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded text-xs">
-                          Saved
-                        </span>
-                      ) : (
-                        <span className="text-slate-600 bg-slate-50 border border-slate-200 px-2 py-0.5 rounded text-xs">
-                          Editable
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
+                        </td>
+                        {/* Total full mark */}
+                        <td className="border border-black px-2 py-1 text-center">
+                          {config?.total ?? ""}
+                        </td>
+                        {/* Obtain mark */}
+                        <td className="border border-black px-2 py-1 text-center">
+                          {obtain ?? ""}
+                        </td>
+                        {/* Letter */}
+                        <td className="border border-black px-2 py-1 text-center">
+                          {existing?.letter || ""}
+                        </td>
+                        {/* GPA */}
+                        <td className="border border-black px-2 py-1 text-center">
+                          {existing?.gpa != null ? existing.gpa : ""}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
 
-              <div className="p-3 flex justify-end">
+              <div className="mt-4 flex justify-end">
                 <button
-                  onClick={saveAll}
+                  onClick={handleSave}
+                  disabled={!config}
                   className="px-4 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60"
-                  disabled={
-                    !subjectId ||
-                    !examId ||
-                    students.length === 0 ||
-                    !config
-                  }
                 >
-                  Save all
+                  Save marks
                 </button>
               </div>
             </>
           )}
       </div>
-
-      {/* Recently saved marks modal */}
-      {showSavedModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div
-            className="absolute inset-0 bg-black/40"
-            onClick={() => setShowSavedModal(false)}
-          />
-          <div className="relative bg-white rounded-xl shadow-xl w-full max-w-2xl mx-4">
-            <div className="px-4 py-3 border-b flex items-center justify-between">
-              <div className="font-semibold">
-                Recently saved marks
-                {currentExamName ? ` — ${currentExamName}` : ""}
-                {currentSubjectName ? ` (${currentSubjectName})` : ""}
-              </div>
-              <button
-                onClick={() => setShowSavedModal(false)}
-                className="px-2 py-1 text-sm border rounded hover:bg-slate-50"
-              >
-                Close
-              </button>
-            </div>
-
-            {!lastSavedRows.length ? (
-              <div className="p-4 text-sm text-slate-600">
-                Nothing saved yet in this session.
-              </div>
-            ) : (
-              <div className="max-h-[60vh] overflow-auto">
-                <div className="grid grid-cols-6 gap-3 px-4 py-2 text-xs font-medium text-slate-600 border-b bg-slate-50">
-                  <div>#</div>
-                  <div>Name</div>
-                  <div>Roll</div>
-                  <div>CQ</div>
-                  <div>MCQ / Practical</div>
-                  <div>Total</div>
-                </div>
-                {lastSavedRows.map((r, i) => (
-                  <div
-                    key={`${r.sid}-${i}`}
-                    className="grid grid-cols-6 gap-3 px-4 py-2 text-sm border-b last:border-b-0"
-                  >
-                    <div>{i + 1}</div>
-                    <div>{r.name}</div>
-                    <div>{r.roll}</div>
-                    <div>{r.cq ?? "—"}</div>
-                    <div>
-                      {r.mcq != null ? `MCQ ${r.mcq}` : ""}
-                      {r.practical != null
-                        ? `${r.mcq != null ? " | " : ""}Prac ${r.practical}`
-                        : r.mcq == null
-                        ? "—"
-                        : ""}
-                    </div>
-                    <div>{r.score}</div>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            <div className="p-3 flex justify-end gap-2">
-              <button
-                onClick={() => setLastSavedRows([])}
-                className="px-3 py-1.5 text-sm rounded border bg-white hover:bg-slate-50"
-              >
-                Clear list
-              </button>
-              <button
-                onClick={() => setShowSavedModal(false)}
-                className="px-3 py-1.5 text-sm rounded bg-emerald-600 text-white hover:bg-emerald-700"
-              >
-                Done
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
