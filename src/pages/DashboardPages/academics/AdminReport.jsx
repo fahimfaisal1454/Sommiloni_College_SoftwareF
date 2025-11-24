@@ -47,6 +47,12 @@ export default function AdminReport() {
   const [roster, setRoster] = useState({}); // { [studentId]: { roll, name } }
   const [subjectMeta, setSubjectMeta] = useState({}); // { [subjectId]: { id, name, teacher_name } }
 
+  // exam subject full marks { [subjectId]: { full_cq, full_mcq, full_practical, total } }
+  const [examConfigs, setExamConfigs] = useState({});
+
+  // active grade scale bands (0–100)
+  const [gradeBands, setGradeBands] = useState([]);
+
   // list for left pane
   const studentsList = useMemo(() => {
     const rows = Object.entries(roster).map(([idStr, v]) => ({
@@ -62,6 +68,36 @@ export default function AdminReport() {
   const [loadingDetails, setLoadingDetails] = useState(false);
   const [detailRows, setDetailRows] = useState([]); // right table rows
   const [totals, setTotals] = useState(null); // { totalScore, avgGpa, count }
+
+  /* ---------- helpers ---------- */
+
+  // grade bands based on percentage (0–100)
+  const gradeFromPercentage = (percent) => {
+    if (
+      !gradeBands.length ||
+      percent === null ||
+      percent === undefined ||
+      Number.isNaN(percent)
+    ) {
+      return { letter: "—", gpa: "—" };
+    }
+    const p = Number(percent);
+    for (const band of gradeBands) {
+      const min = Number(band.min_score);
+      const max = Number(band.max_score);
+      if (!Number.isFinite(min) || !Number.isFinite(max)) continue;
+      if (p >= min && p <= max) {
+        return {
+          letter: band.letter || "—",
+          gpa:
+            band.gpa === null || band.gpa === undefined
+              ? "—"
+              : band.gpa,
+        };
+      }
+    }
+    return { letter: "—", gpa: "—" };
+  };
 
   /* ---------- load years ---------- */
   useEffect(() => {
@@ -80,6 +116,24 @@ export default function AdminReport() {
     })();
   }, []);
 
+  /* ---------- load active grade scale once ---------- */
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await AxiosInstance.get("grade-scales/");
+        const list = Array.isArray(res.data) ? res.data : res.data?.results || [];
+        const active = list.find((s) => s.is_active) || list[0];
+        if (active && Array.isArray(active.bands)) {
+          setGradeBands(active.bands);
+        } else {
+          setGradeBands([]);
+        }
+      } catch {
+        setGradeBands([]);
+      }
+    })();
+  }, []);
+
   /* ---------- load classes for year ---------- */
   useEffect(() => {
     if (!year) {
@@ -94,6 +148,7 @@ export default function AdminReport() {
       setSelectedStudentId(null);
       setDetailRows([]);
       setTotals(null);
+      setExamConfigs({});
       return;
     }
     (async () => {
@@ -122,6 +177,7 @@ export default function AdminReport() {
     setSelectedStudentId(null);
     setDetailRows([]);
     setTotals(null);
+    setExamConfigs({});
   }, [classId, classes]);
 
   /* ---------- exams (year + class + section) ---------- */
@@ -146,6 +202,37 @@ export default function AdminReport() {
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [year, classId, sectionId]);
+
+  /* ---------- exam subject configs (full marks per subject) ---------- */
+  useEffect(() => {
+    (async () => {
+      setExamConfigs({});
+      if (!examId) return;
+      try {
+        const { data } = await AxiosInstance.get("exam-subject-configs/", {
+          params: { exam: examId },
+        });
+        const arr = Array.isArray(data) ? data : data?.results || [];
+        const map = {};
+        arr.forEach((cfg) => {
+          const sid = String(cfg.subject_id ?? cfg.subject);
+          if (!sid) return;
+          const full_cq = Number(cfg.full_cq || 0);
+          const full_mcq = Number(cfg.full_mcq || 0);
+          const full_practical = Number(cfg.full_practical || 0);
+          map[sid] = {
+            full_cq,
+            full_mcq,
+            full_practical,
+            total: full_cq + full_mcq + full_practical,
+          };
+        });
+        setExamConfigs(map);
+      } catch {
+        setExamConfigs({});
+      }
+    })();
+  }, [examId]);
 
   /* ---------- subject meta (from timetable preferred) ---------- */
   useEffect(() => {
@@ -294,13 +381,40 @@ export default function AdminReport() {
         rowsBySubject = new Map();
         for (const sid of union) {
           const mk = map.get(sid);
+
+          const rawScore =
+            mk && mk.score !== null && mk.score !== undefined
+              ? Number(mk.score)
+              : null;
+
+          let gpa =
+            mk && mk.gpa !== null && mk.gpa !== undefined
+              ? Number(mk.gpa)
+              : null;
+          let letter =
+            mk?.letter ??
+            (gpa !== null ? letterFromGPA(gpa) : "—");
+
+          // recompute grade from percentage if we know full marks
+          const cfg = examConfigs[sid];
+          const fullTotal =
+            cfg && Number.isFinite(cfg.total) && cfg.total > 0
+              ? cfg.total
+              : null;
+          if (rawScore !== null && fullTotal) {
+            const percent = (rawScore / fullTotal) * 100;
+            const graded = gradeFromPercentage(percent);
+            if (graded.letter !== "—") letter = graded.letter;
+            if (graded.gpa !== "—") gpa = graded.gpa;
+          }
+
           rowsBySubject.set(sid, {
             subject_id: sid,
             subject_name: subjectMeta[sid]?.name || sid,
             teacher_name: subjectMeta[sid]?.teacher_name || "—",
-            score: mk?.score ?? null,
-            gpa: mk?.gpa ?? null,
-            letter: mk?.letter ?? (mk?.gpa != null ? letterFromGPA(mk.gpa) : "—"),
+            score: rawScore,
+            gpa,
+            letter,
           });
         }
 
@@ -310,11 +424,18 @@ export default function AdminReport() {
         );
         setDetailRows(rows);
 
-        // totals
-        const valid = rows.filter((r) => r.score != null || r.gpa != null);
+        // totals – sum real (out of full) scores and average recomputed GPAs
+        const valid = rows.filter(
+          (r) => r.score != null || r.gpa != null
+        );
         if (valid.length) {
-          const totalScore = valid.reduce((s, r) => s + Number(r.score || 0), 0);
-          const avgGpa = valid.reduce((s, r) => s + Number(r.gpa || 0), 0) / valid.length;
+          const totalScore = valid.reduce(
+            (s, r) => s + Number(r.score || 0),
+            0
+          );
+          const avgGpa =
+            valid.reduce((s, r) => s + Number(r.gpa || 0), 0) /
+            valid.length;
           setTotals({ totalScore, avgGpa, count: valid.length });
         } else {
           setTotals(null);
@@ -326,9 +447,9 @@ export default function AdminReport() {
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedStudentId, examId, exams, subjectMeta, year, classId, sectionId]);
+  }, [selectedStudentId, examId, exams, subjectMeta, year, classId, sectionId, examConfigs, gradeBands]);
 
-  /* ---------- helpers ---------- */
+  /* ---------- more helpers ---------- */
   const selectedStudent = selectedStudentId
     ? { id: selectedStudentId, ...(roster[selectedStudentId] || {}) }
     : null;

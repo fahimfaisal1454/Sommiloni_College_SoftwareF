@@ -1,8 +1,16 @@
+// src/pages/DashboardPages/academics/GradeScaleManager.jsx
 import { useEffect, useMemo, useState } from "react";
 import AxiosInstance from "../../../components/AxiosInstance";
 import { toast } from "react-hot-toast";
 
-const EMPTY_ROW = { id: null, min_score: "", max_score: "", letter: "", gpa: "", _deleted: false };
+const EMPTY_ROW = {
+  id: null,
+  min_score: "",
+  max_score: "",
+  letter: "",
+  gpa: "",
+  _deleted: false,
+};
 
 export default function GradeScaleManager() {
   const [scales, setScales] = useState([]);
@@ -16,9 +24,9 @@ export default function GradeScaleManager() {
   const [editBands, setEditBands] = useState([]);
   const [savingEdit, setSavingEdit] = useState(false);
 
-  // ───────────────────────────────────────────────────────────────────────────
-  // Data loading
-  // ───────────────────────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────
+  // Load existing grade scales
+  // ─────────────────────────────────────────────
   const load = async () => {
     try {
       const { data } = await AxiosInstance.get("grade-scales/");
@@ -27,46 +35,70 @@ export default function GradeScaleManager() {
       toast.error("Failed to load grade scales");
     }
   };
-  useEffect(() => { load(); }, []);
 
-  // ───────────────────────────────────────────────────────────────────────────
-  // CREATE (new scale)
-  // ───────────────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    load();
+  }, []);
+
+  // ─────────────────────────────────────────────
+  // CREATE: add/edit rows in local state
+  // ─────────────────────────────────────────────
   const addBand = () => setBands((b) => [...b, { ...EMPTY_ROW }]);
-  const rmBand  = (i) => setBands((b) => b.filter((_, idx) => idx !== i));
-  const setBand = (i, k, v) => setBands((b) => b.map((row, idx) => idx === i ? { ...row, [k]: v } : row));
+  const rmBand = (i) =>
+    setBands((b) => b.filter((_, idx) => idx !== i));
+  const setBand = (i, k, v) =>
+    setBands((b) =>
+      b.map((row, idx) => (idx === i ? { ...row, [k]: v } : row))
+    );
 
+  // convert to numbers, uppercase letters, etc.
   const normalized = useMemo(() => {
     const rows = bands
-      .map(r => ({
+      .map((r) => ({
         min_score: r.min_score === "" ? "" : Number(r.min_score),
         max_score: r.max_score === "" ? "" : Number(r.max_score),
         letter: (r.letter || "").toUpperCase().trim(),
         gpa: r.gpa === "" ? "" : Number(r.gpa),
       }))
-      .filter(r =>
-        !(r.min_score === "" && r.max_score === "" && r.letter === "" && r.gpa === "")
+      .filter(
+        (r) =>
+          !(
+            r.min_score === "" &&
+            r.max_score === "" &&
+            r.letter === "" &&
+            r.gpa === ""
+          )
       );
     return rows;
   }, [bands]);
 
+  // ─────────────────────────────────────────────
+  // CREATE validation (0–100 percentage)
+  // ─────────────────────────────────────────────
   const createErrors = useMemo(() => {
     const errs = [];
     const isNum = (x) => typeof x === "number" && !Number.isNaN(x);
     const rows = normalized;
 
-    // base per-row validation
+    // per-row checks
     rows.forEach((r, i) => {
       const e = {};
-      if (!isNum(r.min_score) || r.min_score < 0 || r.min_score > 100) e.min = 1;
-      if (!isNum(r.max_score) || r.max_score < 0 || r.max_score > 100) e.max = 1;
-      if (isNum(r.min_score) && isNum(r.max_score) && r.min_score > r.max_score) e.range = 1;
+      if (!isNum(r.min_score) || r.min_score < 0 || r.min_score > 100)
+        e.min = 1;
+      if (!isNum(r.max_score) || r.max_score < 0 || r.max_score > 100)
+        e.max = 1;
+      if (
+        isNum(r.min_score) &&
+        isNum(r.max_score) &&
+        r.min_score > r.max_score
+      )
+        e.range = 1;
       if (!r.letter) e.letter = 1;
       if (!(typeof r.gpa === "number" && !Number.isNaN(r.gpa))) e.gpa = 1;
       errs[i] = e;
     });
 
-    // duplicates: letter + exact range
+    // duplicates
     const byLetter = new Map();
     const byRange = new Map();
     rows.forEach((r, i) => {
@@ -81,22 +113,26 @@ export default function GradeScaleManager() {
       }
     });
     for (const [, idxs] of byLetter) {
-      if (idxs.length > 1) idxs.forEach(i => (errs[i].dupLetter = 1));
+      if (idxs.length > 1) idxs.forEach((i) => (errs[i].dupLetter = 1));
     }
     for (const [, idxs] of byRange) {
-      if (idxs.length > 1) idxs.forEach(i => (errs[i].dupRange = 1));
+      if (idxs.length > 1) idxs.forEach((i) => (errs[i].dupRange = 1));
     }
 
-    // overlap (same mark covered by different bands) → warning, not crash
+    // overlaps (just warning)
     const sorted = rows
       .map((r, i) => ({ ...r, __i: i }))
-      .filter(r => Number.isFinite(r.min_score) && Number.isFinite(r.max_score))
-      .sort((a,b)=>a.min_score-b.min_score);
+      .filter(
+        (r) => Number.isFinite(r.min_score) && Number.isFinite(r.max_score)
+      )
+      .sort((a, b) => a.min_score - b.min_score);
 
-    for (let k=1; k<sorted.length; k++){
-      const a = sorted[k-1], b = sorted[k];
+    for (let k = 1; k < sorted.length; k++) {
+      const a = sorted[k - 1];
+      const b = sorted[k];
       if (a.max_score >= b.min_score) {
-        errs[a.__i].overlap = 1; errs[b.__i].overlap = 1;
+        errs[a.__i].overlap = 1;
+        errs[b.__i].overlap = 1;
       }
     }
 
@@ -104,7 +140,7 @@ export default function GradeScaleManager() {
   }, [normalized]);
 
   const hasCreateWarnings = useMemo(
-    () => createErrors.some(e => e.overlap || e.dupLetter || e.dupRange),
+    () => createErrors.some((e) => e.overlap || e.dupLetter || e.dupRange),
     [createErrors]
   );
 
@@ -112,9 +148,9 @@ export default function GradeScaleManager() {
     () =>
       !!name.trim() &&
       normalized.length > 0 &&
-      createErrors.every(e => {
+      createErrors.every((e) => {
         const { min, max, range, letter, gpa } = e;
-        // warnings (overlap/dups) don't block saving; hard errors do
+        // warnings (overlap/dups) allowed; hard errors not
         return !(min || max || range || letter || gpa);
       }),
     [name, normalized, createErrors]
@@ -126,29 +162,34 @@ export default function GradeScaleManager() {
       return;
     }
     if (hasCreateWarnings) {
-      toast((t) => (
-        <div>
-          <div className="font-semibold mb-1">Warning</div>
-          <div className="text-sm">Some bands overlap or duplicate. Continue?</div>
-          <div className="mt-2 flex gap-2">
-            <button
-              className="px-2 py-1 rounded bg-rose-600 text-white"
-              onClick={() => toast.dismiss(t.id)}
-            >
-              Review
-            </button>
-            <button
-              className="px-2 py-1 rounded bg-emerald-600 text-white"
-              onClick={async () => {
-                toast.dismiss(t.id);
-                await doSaveCreate();
-              }}
-            >
-              Save anyway
-            </button>
+      toast(
+        (t) => (
+          <div>
+            <div className="font-semibold mb-1">Warning</div>
+            <div className="text-sm">
+              Some percentage ranges overlap or duplicate. Continue?
+            </div>
+            <div className="mt-2 flex gap-2">
+              <button
+                className="px-2 py-1 rounded bg-rose-600 text-white"
+                onClick={() => toast.dismiss(t.id)}
+              >
+                Review
+              </button>
+              <button
+                className="px-2 py-1 rounded bg-emerald-600 text-white"
+                onClick={async () => {
+                  toast.dismiss(t.id);
+                  await doSaveCreate();
+                }}
+              >
+                Save anyway
+              </button>
+            </div>
           </div>
-        </div>
-      ), { duration: 6000 });
+        ),
+        { duration: 6000 }
+      );
       return;
     }
     await doSaveCreate();
@@ -158,27 +199,35 @@ export default function GradeScaleManager() {
     setBusy(true);
     try {
       const { data: scale } = await AxiosInstance.post("grade-scales/", {
-        name: name.trim(), is_active: false
+        name: name.trim(),
+        is_active: false,
       });
+
       for (const b of normalized) {
         await AxiosInstance.post("grade-bands/", {
           scale: scale.id,
-          min_score: b.min_score,
-          max_score: b.max_score,
+          min_score: b.min_score, // percentage
+          max_score: b.max_score, // percentage
           letter: b.letter,
           gpa: b.gpa,
         });
       }
+
       toast.success("Scale saved");
-      setName(""); setBands([{ ...EMPTY_ROW }]);
+      setName("");
+      setBands([{ ...EMPTY_ROW }]);
       await load();
     } catch (e) {
       const msg =
         e?.response?.data?.detail ||
         e?.response?.data?.name ||
-        (typeof e?.response?.data === "string" ? e.response.data : "Save failed");
+        (typeof e?.response?.data === "string"
+          ? e.response.data
+          : "Save failed");
       toast.error(String(msg));
-    } finally { setBusy(false); }
+    } finally {
+      setBusy(false);
+    }
   };
 
   const activate = async (id) => {
@@ -186,7 +235,9 @@ export default function GradeScaleManager() {
       await AxiosInstance.patch(`grade-scales/${id}/`, { is_active: true });
       toast.success("Activated");
       await load();
-    } catch { toast.error("Activation failed"); }
+    } catch {
+      toast.error("Activation failed");
+    }
   };
 
   const delScale = async (id) => {
@@ -194,20 +245,20 @@ export default function GradeScaleManager() {
     try {
       await AxiosInstance.delete(`grade-scales/${id}/`);
       toast.success("Deleted");
-      if (editingId === id) { setEditingId(null); }
+      if (editingId === id) setEditingId(null);
       await load();
     } catch {
       toast.error("Delete failed");
     }
   };
 
-  // ───────────────────────────────────────────────────────────────────────────
-  // EDIT (existing scale)
-  // ───────────────────────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────
+  // EDIT existing scales
+  // ─────────────────────────────────────────────
   const beginEdit = (scale) => {
     setEditingId(scale.id);
     setEditName(scale.name || "");
-    const rows = (scale.bands || []).map(b => ({
+    const rows = (scale.bands || []).map((b) => ({
       id: b.id,
       min_score: String(b.min_score ?? ""),
       max_score: String(b.max_score ?? ""),
@@ -224,18 +275,25 @@ export default function GradeScaleManager() {
     setEditBands([]);
   };
 
-  const addEditRow = () => setEditBands(b => [...b, { ...EMPTY_ROW }]);
-  const markDeleteEditRow = (idx) =>
-    setEditBands(b => b.map((r,i)=> i===idx ? { ...r, _deleted: !r._deleted } : r));
-  const setEditRow = (idx, k, v) =>
-    setEditBands(b => b.map((r,i)=> i===idx ? { ...r, [k]: v } : r));
+  const addEditRow = () =>
+    setEditBands((b) => [...b, { ...EMPTY_ROW }]);
 
-  // ⚠️ safe, index-stable error calc (no indexOf on copies)
+  const markDeleteEditRow = (idx) =>
+    setEditBands((b) =>
+      b.map((r, i) =>
+        i === idx ? { ...r, _deleted: !r._deleted } : r
+      )
+    );
+
+  const setEditRow = (idx, k, v) =>
+    setEditBands((b) =>
+      b.map((r, i) => (i === idx ? { ...r, [k]: v } : r))
+    );
+
   const editErrors = useMemo(() => {
     const errs = editBands.map(() => ({}));
     const isNum = (x) => typeof x === "number" && !Number.isNaN(x);
 
-    // Active (non-deleted) with original index i
     const active = editBands
       .map((r, i) => ({
         i,
@@ -245,20 +303,27 @@ export default function GradeScaleManager() {
         letter: (r.letter || "").toUpperCase().trim(),
         gpa: r.gpa === "" ? "" : Number(r.gpa),
       }))
-      .filter(r => !r._deleted);
+      .filter((r) => !r._deleted);
 
-    // Field-level checks
+    // field checks
     for (const row of active) {
       const e = {};
-      if (!isNum(row.min_score) || row.min_score < 0 || row.min_score > 100) e.min = 1;
-      if (!isNum(row.max_score) || row.max_score < 0 || row.max_score > 100) e.max = 1;
-      if (isNum(row.min_score) && isNum(row.max_score) && row.min_score > row.max_score) e.range = 1;
+      if (!isNum(row.min_score) || row.min_score < 0 || row.min_score > 100)
+        e.min = 1;
+      if (!isNum(row.max_score) || row.max_score < 0 || row.max_score > 100)
+        e.max = 1;
+      if (
+        isNum(row.min_score) &&
+        isNum(row.max_score) &&
+        row.min_score > row.max_score
+      )
+        e.range = 1;
       if (!row.letter) e.letter = 1;
       if (!(typeof row.gpa === "number" && !Number.isNaN(row.gpa))) e.gpa = 1;
       errs[row.i] = e;
     }
 
-    // duplicates (letter + exact range)
+    // duplicates
     const byLetter = new Map();
     const byRange = new Map();
     active.forEach((r) => {
@@ -273,39 +338,44 @@ export default function GradeScaleManager() {
       }
     });
     for (const [, idxs] of byLetter) {
-      if (idxs.length > 1) idxs.forEach(i => (errs[i].dupLetter = 1));
+      if (idxs.length > 1) idxs.forEach((i) => (errs[i].dupLetter = 1));
     }
     for (const [, idxs] of byRange) {
-      if (idxs.length > 1) idxs.forEach(i => (errs[i].dupRange = 1));
+      if (idxs.length > 1) idxs.forEach((i) => (errs[i].dupRange = 1));
     }
 
-    // overlap (any shared marks between bands)
+    // overlaps (warning)
     const sorted = [...active]
-      .filter(r => Number.isFinite(r.min_score) && Number.isFinite(r.max_score))
-      .sort((a,b)=>a.min_score-b.min_score);
-    for (let k=1; k<sorted.length; k++){
-      const a = sorted[k-1], b = sorted[k];
+      .filter(
+        (r) => Number.isFinite(r.min_score) && Number.isFinite(r.max_score)
+      )
+      .sort((a, b) => a.min_score - b.min_score);
+    for (let k = 1; k < sorted.length; k++) {
+      const a = sorted[k - 1];
+      const b = sorted[k];
       if (a.max_score >= b.min_score) {
         (errs[a.i] ||= {}).overlap = 1;
         (errs[b.i] ||= {}).overlap = 1;
       }
     }
+
     return errs;
   }, [editBands]);
 
   const hasEditWarnings = useMemo(
-    () => editErrors.some(e => e.overlap || e.dupLetter || e.dupRange),
+    () => editErrors.some((e) => e.overlap || e.dupLetter || e.dupRange),
     [editErrors]
   );
 
   const canSaveEdit = useMemo(() => {
     if (!editingId) return false;
-    const activeRows = editBands.filter(r => !r._deleted);
-    // hard errors block save; warnings don’t
-    const okRows = activeRows.length > 0 && editErrors.every(e => {
-      const { min, max, range, letter, gpa } = e;
-      return !(min || max || range || letter || gpa);
-    });
+    const activeRows = editBands.filter((r) => !r._deleted);
+    const okRows =
+      activeRows.length > 0 &&
+      editErrors.every((e) => {
+        const { min, max, range, letter, gpa } = e;
+        return !(min || max || range || letter || gpa);
+      });
     return !!editName.trim() && okRows;
   }, [editingId, editName, editBands, editErrors]);
 
@@ -315,29 +385,34 @@ export default function GradeScaleManager() {
       return;
     }
     if (hasEditWarnings) {
-      toast((t) => (
-        <div>
-          <div className="font-semibold mb-1">Warning</div>
-          <div className="text-sm">Some bands overlap or duplicate. Continue?</div>
-          <div className="mt-2 flex gap-2">
-            <button
-              className="px-2 py-1 rounded bg-rose-600 text-white"
-              onClick={() => toast.dismiss(t.id)}
-            >
-              Review
-            </button>
-            <button
-              className="px-2 py-1 rounded bg-emerald-600 text-white"
-              onClick={async () => {
-                toast.dismiss(t.id);
-                await doSaveEdit();
-              }}
-            >
-              Save anyway
-            </button>
+      toast(
+        (t) => (
+          <div>
+            <div className="font-semibold mb-1">Warning</div>
+            <div className="text-sm">
+              Some percentage ranges overlap or duplicate. Continue?
+            </div>
+            <div className="mt-2 flex gap-2">
+              <button
+                className="px-2 py-1 rounded bg-rose-600 text-white"
+                onClick={() => toast.dismiss(t.id)}
+              >
+                Review
+              </button>
+              <button
+                className="px-2 py-1 rounded bg-emerald-600 text-white"
+                onClick={async () => {
+                  toast.dismiss(t.id);
+                  await doSaveEdit();
+                }}
+              >
+                Save anyway
+              </button>
+            </div>
           </div>
-        </div>
-      ), { duration: 6000 });
+        ),
+        { duration: 6000 }
+      );
       return;
     }
     await doSaveEdit();
@@ -346,19 +421,19 @@ export default function GradeScaleManager() {
   const doSaveEdit = async () => {
     setSavingEdit(true);
     try {
-      // 1) update scale name (keep is_active as is)
-      await AxiosInstance.patch(`grade-scales/${editingId}/`, { name: editName.trim() });
+      await AxiosInstance.patch(`grade-scales/${editingId}/`, {
+        name: editName.trim(),
+      });
 
-      // 2) upsert/delete bands
       for (let i = 0; i < editBands.length; i++) {
         const r = editBands[i];
+
         if (r._deleted && r.id) {
           await AxiosInstance.delete(`grade-bands/${r.id}/`);
           continue;
         }
-        if (r._deleted && !r.id) continue; // brand new row marked delete
+        if (r._deleted && !r.id) continue;
 
-        // normalize values for persist
         const min = r.min_score === "" ? null : Number(r.min_score);
         const max = r.max_score === "" ? null : Number(r.max_score);
         const gpa = r.gpa === "" ? null : Number(r.gpa);
@@ -388,39 +463,51 @@ export default function GradeScaleManager() {
     } catch (e) {
       const msg =
         e?.response?.data?.detail ||
-        (typeof e?.response?.data === "string" ? e.response.data : "Update failed");
+        (typeof e?.response?.data === "string"
+          ? e.response.data
+          : "Update failed");
       toast.error(String(msg));
     } finally {
       setSavingEdit(false);
     }
   };
 
-  // ───────────────────────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────
   // UI helpers
-  // ───────────────────────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────
   const rowErrText = (e) =>
     [
-      e.min && "Min 0–100",
-      e.max && "Max 0–100",
-      e.range && "Min ≤ Max",
+      e.min && "Min % must be 0–100",
+      e.max && "Max % must be 0–100",
+      e.range && "Min % ≤ Max %",
       e.overlap && "Overlaps another band",
       e.dupLetter && "Duplicate letter",
       e.dupRange && "Duplicate exact range",
       e.letter && "Letter required",
       e.gpa && "GPA must be a number",
-    ].filter(Boolean).join(" • ");
+    ]
+      .filter(Boolean)
+      .join(" • ");
 
   return (
     <div className="space-y-6">
-      <h1 className="text-xl font-bold">Grade Scale</h1>
+      <h1 className="text-xl font-bold">Grade Scale (Percentage based)</h1>
 
-      {/* Create */}
+      <p className="text-xs text-slate-600">
+        Define grade bands in <b>percentage</b>. Example:{" "}
+        <span className="font-mono">80–100% → A+ / 5.00</span>. For a 60-mark
+        subject, 48 marks (48 ÷ 60 × 100 = 80%) will also get A+.
+      </p>
+
+      {/* Create new scale */}
       <div className="bg-white border p-4 rounded-md space-y-3">
         <div>
-          <label className="text-sm font-semibold">Scale name</label>
+          <label className="text-sm font-semibold">
+            Scale name (e.g. &quot;Default 5.00 – Percent&quot;)
+          </label>
           <input
             className="w-full border rounded px-2 py-1"
-            placeholder="Default 5.0"
+            placeholder="Default 5.00 – Percent"
             value={name}
             onChange={(e) => setName(e.target.value)}
           />
@@ -430,8 +517,8 @@ export default function GradeScaleManager() {
           <table className="min-w-[680px] text-sm">
             <thead>
               <tr className="text-left border-b">
-                <th className="py-1 pr-3 w-28">Min</th>
-                <th className="py-1 pr-3 w-28">Max</th>
+                <th className="py-1 pr-3 w-28">Min %</th>
+                <th className="py-1 pr-3 w-28">Max %</th>
                 <th className="py-1 pr-3 w-24">Letter</th>
                 <th className="py-1 pr-3 w-24">GPA</th>
                 <th className="py-1 pr-3 w-24"></th>
@@ -444,43 +531,72 @@ export default function GradeScaleManager() {
                   <tr key={i} className="border-b align-top">
                     <td className="py-1 pr-3">
                       <input
-                        className={`border rounded px-2 py-1 w-24 ${err.min || err.range || err.overlap ? "border-red-400" : ""}`}
+                        className={`border rounded px-2 py-1 w-24 ${
+                          err.min || err.range || err.overlap
+                            ? "border-red-400"
+                            : ""
+                        }`}
                         value={b.min_score}
-                        onChange={(e)=>setBand(i,"min_score",e.target.value)}
+                        onChange={(e) =>
+                          setBand(i, "min_score", e.target.value)
+                        }
                         inputMode="numeric"
-                        placeholder="0"
+                        placeholder="80"
                       />
                     </td>
                     <td className="py-1 pr-3">
                       <input
-                        className={`border rounded px-2 py-1 w-24 ${err.max || err.range || err.overlap ? "border-red-400" : ""}`}
+                        className={`border rounded px-2 py-1 w-24 ${
+                          err.max || err.range || err.overlap
+                            ? "border-red-400"
+                            : ""
+                        }`}
                         value={b.max_score}
-                        onChange={(e)=>setBand(i,"max_score",e.target.value)}
+                        onChange={(e) =>
+                          setBand(i, "max_score", e.target.value)
+                        }
                         inputMode="numeric"
                         placeholder="100"
                       />
                     </td>
                     <td className="py-1 pr-3">
                       <input
-                        className={`border rounded px-2 py-1 w-20 ${err.letter ? "border-red-400" : ""}`}
+                        className={`border rounded px-2 py-1 w-20 ${
+                          err.letter ? "border-red-400" : ""
+                        }`}
                         value={b.letter}
-                        onChange={(e)=>setBand(i,"letter",e.target.value.toUpperCase())}
+                        onChange={(e) =>
+                          setBand(
+                            i,
+                            "letter",
+                            e.target.value.toUpperCase()
+                          )
+                        }
                         placeholder="A+"
                       />
                     </td>
                     <td className="py-1 pr-3">
                       <input
-                        className={`border rounded px-2 py-1 w-20 ${err.gpa ? "border-red-400" : ""}`}
+                        className={`border rounded px-2 py-1 w-20 ${
+                          err.gpa ? "border-red-400" : ""
+                        }`}
                         value={b.gpa}
-                        onChange={(e)=>setBand(i,"gpa",e.target.value)}
+                        onChange={(e) => setBand(i, "gpa", e.target.value)}
                         inputMode="decimal"
                         placeholder="5.00"
                       />
                     </td>
                     <td className="py-1 pr-3">
-                      <button className="text-xs text-red-600" onClick={()=>rmBand(i)}>Remove</button>
-                      {Object.keys(err).length>0 && (
-                        <div className="text-[11px] text-red-600 mt-1">{rowErrText(err)}</div>
+                      <button
+                        className="text-xs text-red-600"
+                        onClick={() => rmBand(i)}
+                      >
+                        Remove
+                      </button>
+                      {Object.keys(err).length > 0 && (
+                        <div className="text-[11px] text-red-600 mt-1">
+                          {rowErrText(err)}
+                        </div>
                       )}
                     </td>
                   </tr>
@@ -491,20 +607,26 @@ export default function GradeScaleManager() {
         </div>
 
         <div className="flex items-center gap-2">
-          <button onClick={addBand} className="px-3 py-1 border rounded">Add band</button>
+          <button
+            onClick={addBand}
+            className="px-3 py-1 border rounded text-sm"
+          >
+            Add band
+          </button>
           <button
             onClick={save}
             disabled={busy || !canCreate}
-            className="px-3 py-1 rounded bg-[#2c8e3f] text-white disabled:opacity-60"
+            className="px-3 py-1 rounded bg-[#2c8e3f] text-white disabled:opacity-60 text-sm"
           >
             {busy ? "Saving..." : "Save scale"}
           </button>
         </div>
       </div>
 
-      {/* Existing */}
+      {/* Existing scales */}
       <div className="bg-white border p-4 rounded-md">
-        <h2 className="font-semibold">Existing</h2>
+        <h2 className="font-semibold">Existing scales</h2>
+
         {!scales.length ? (
           <p className="text-sm text-gray-600 mt-2">No scales yet.</p>
         ) : (
@@ -513,34 +635,59 @@ export default function GradeScaleManager() {
               const isEditing = editingId === s.id;
               return (
                 <li key={s.id} className="py-3">
-                  {/* Header */}
+                  {/* Header row */}
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
                       {isEditing ? (
                         <input
                           className="border rounded px-2 py-1"
                           value={editName}
-                          onChange={(e)=>setEditName(e.target.value)}
+                          onChange={(e) =>
+                            setEditName(e.target.value)
+                          }
                         />
                       ) : (
-                        <div className="font-medium">{s.name}</div>
+                        <div className="font-medium">
+                          {s.name}
+                        </div>
                       )}
-                      <span className={`text-xs px-2 py-0.5 rounded ${s.is_active ? "bg-green-100 text-green-700":"bg-gray-100 text-gray-600"}`}>
+                      <span
+                        className={`text-xs px-2 py-0.5 rounded ${
+                          s.is_active
+                            ? "bg-green-100 text-green-700"
+                            : "bg-gray-100 text-gray-600"
+                        }`}
+                      >
                         {s.is_active ? "Active" : "Inactive"}
                       </span>
-                      <span className="text-xs text-gray-500">ID: {s.id}</span>
+                      <span className="text-xs text-gray-500">
+                        ID: {s.id}
+                      </span>
                     </div>
 
                     <div className="flex items-center gap-2">
                       {!s.is_active && !isEditing && (
-                        <button className="text-xs bg-black text-white rounded px-2 py-1" onClick={()=>activate(s.id)}>
+                        <button
+                          className="text-xs bg-black text-white rounded px-2 py-1"
+                          onClick={() => activate(s.id)}
+                        >
                           Make Active
                         </button>
                       )}
                       {!isEditing ? (
                         <>
-                          <button className="text-xs border rounded px-2 py-1" onClick={()=>beginEdit(s)}>Edit</button>
-                          <button className="text-xs bg-rose-600 text-white rounded px-2 py-1" onClick={()=>delScale(s.id)}>Delete</button>
+                          <button
+                            className="text-xs border rounded px-2 py-1"
+                            onClick={() => beginEdit(s)}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            className="text-xs bg-rose-600 text-white rounded px-2 py-1"
+                            onClick={() => delScale(s.id)}
+                          >
+                            Delete
+                          </button>
                         </>
                       ) : (
                         <>
@@ -551,7 +698,12 @@ export default function GradeScaleManager() {
                           >
                             {savingEdit ? "Saving…" : "Save"}
                           </button>
-                          <button className="text-xs border rounded px-2 py-1" onClick={cancelEdit}>Cancel</button>
+                          <button
+                            className="text-xs border rounded px-2 py-1"
+                            onClick={cancelEdit}
+                          >
+                            Cancel
+                          </button>
                         </>
                       )}
                     </div>
@@ -559,22 +711,34 @@ export default function GradeScaleManager() {
 
                   {/* Bands table */}
                   {!isEditing ? (
-                    Array.isArray(s.bands) && s.bands.length > 0 && (
+                    Array.isArray(s.bands) &&
+                    s.bands.length > 0 && (
                       <div className="overflow-auto mt-2">
                         <table className="min-w-[420px] text-xs">
                           <thead>
                             <tr className="text-left border-b">
-                              <th className="py-1 pr-3">Range</th>
+                              <th className="py-1 pr-3">
+                                Range (%)
+                              </th>
                               <th className="py-1 pr-3">Letter</th>
                               <th className="py-1 pr-3">GPA</th>
                             </tr>
                           </thead>
                           <tbody>
-                            {s.bands.map((b)=>(
-                              <tr key={b.id} className="border-b">
-                                <td className="py-1 pr-3">{b.min_score}–{b.max_score}</td>
-                                <td className="py-1 pr-3">{b.letter}</td>
-                                <td className="py-1 pr-3">{b.gpa}</td>
+                            {s.bands.map((b) => (
+                              <tr
+                                key={b.id}
+                                className="border-b"
+                              >
+                                <td className="py-1 pr-3">
+                                  {b.min_score}–{b.max_score}%
+                                </td>
+                                <td className="py-1 pr-3">
+                                  {b.letter}
+                                </td>
+                                <td className="py-1 pr-3">
+                                  {b.gpa}
+                                </td>
                               </tr>
                             ))}
                           </tbody>
@@ -586,64 +750,130 @@ export default function GradeScaleManager() {
                       <table className="min-w-[680px] text-xs">
                         <thead>
                           <tr className="text-left border-b">
-                            <th className="py-1 pr-3 w-28">Min</th>
-                            <th className="py-1 pr-3 w-28">Max</th>
-                            <th className="py-1 pr-3 w-24">Letter</th>
-                            <th className="py-1 pr-3 w-24">GPA</th>
+                            <th className="py-1 pr-3 w-28">
+                              Min %
+                            </th>
+                            <th className="py-1 pr-3 w-28">
+                              Max %
+                            </th>
+                            <th className="py-1 pr-3 w-24">
+                              Letter
+                            </th>
+                            <th className="py-1 pr-3 w-24">
+                              GPA
+                            </th>
                             <th className="py-1 pr-3 w-32"></th>
                           </tr>
                         </thead>
                         <tbody>
                           {editBands.map((r, i) => {
                             const e = editErrors[i] || {};
-                            const strike = r._deleted ? "line-through opacity-50" : "";
+                            const strike = r._deleted
+                              ? "line-through opacity-50"
+                              : "";
                             return (
-                              <tr key={i} className="border-b align-top">
+                              <tr
+                                key={i}
+                                className="border-b align-top"
+                              >
                                 <td className="py-1 pr-3">
                                   <input
-                                    className={`border rounded px-2 py-1 w-24 ${strike} ${e.min || e.range || e.overlap ? "border-red-400" : ""}`}
+                                    className={`border rounded px-2 py-1 w-24 ${strike} ${
+                                      e.min ||
+                                      e.range ||
+                                      e.overlap
+                                        ? "border-red-400"
+                                        : ""
+                                    }`}
                                     value={r.min_score}
-                                    onChange={(ev)=>setEditRow(i,"min_score",ev.target.value)}
+                                    onChange={(ev) =>
+                                      setEditRow(
+                                        i,
+                                        "min_score",
+                                        ev.target.value
+                                      )
+                                    }
                                     inputMode="numeric"
                                     disabled={r._deleted}
                                   />
                                 </td>
                                 <td className="py-1 pr-3">
                                   <input
-                                    className={`border rounded px-2 py-1 w-24 ${strike} ${e.max || e.range || e.overlap ? "border-red-400" : ""}`}
+                                    className={`border rounded px-2 py-1 w-24 ${strike} ${
+                                      e.max ||
+                                      e.range ||
+                                      e.overlap
+                                        ? "border-red-400"
+                                        : ""
+                                    }`}
                                     value={r.max_score}
-                                    onChange={(ev)=>setEditRow(i,"max_score",ev.target.value)}
+                                    onChange={(ev) =>
+                                      setEditRow(
+                                        i,
+                                        "max_score",
+                                        ev.target.value
+                                      )
+                                    }
                                     inputMode="numeric"
                                     disabled={r._deleted}
                                   />
                                 </td>
                                 <td className="py-1 pr-3">
                                   <input
-                                    className={`border rounded px-2 py-1 w-20 ${strike} ${e.letter ? "border-red-400" : ""}`}
+                                    className={`border rounded px-2 py-1 w-20 ${strike} ${
+                                      e.letter ? "border-red-400" : ""
+                                    }`}
                                     value={r.letter}
-                                    onChange={(ev)=>setEditRow(i,"letter",ev.target.value.toUpperCase())}
+                                    onChange={(ev) =>
+                                      setEditRow(
+                                        i,
+                                        "letter",
+                                        ev.target.value.toUpperCase()
+                                      )
+                                    }
                                     disabled={r._deleted}
                                   />
                                 </td>
                                 <td className="py-1 pr-3">
                                   <input
-                                    className={`border rounded px-2 py-1 w-20 ${strike} ${e.gpa ? "border-red-400" : ""}`}
+                                    className={`border rounded px-2 py-1 w-20 ${strike} ${
+                                      e.gpa ? "border-red-400" : ""
+                                    }`}
                                     value={r.gpa}
-                                    onChange={(ev)=>setEditRow(i,"gpa",ev.target.value)}
+                                    onChange={(ev) =>
+                                      setEditRow(
+                                        i,
+                                        "gpa",
+                                        ev.target.value
+                                      )
+                                    }
                                     inputMode="decimal"
                                     disabled={r._deleted}
                                   />
                                 </td>
                                 <td className="py-1 pr-3">
                                   <button
-                                    className={`text-xs px-2 py-0.5 rounded border ${r._deleted ? "bg-gray-100" : "bg-rose-50 text-rose-700 border-rose-200"}`}
-                                    onClick={()=>markDeleteEditRow(i)}
+                                    className={`text-xs px-2 py-0.5 rounded border ${
+                                      r._deleted
+                                        ? "bg-gray-100"
+                                        : "bg-rose-50 text-rose-700 border-rose-200"
+                                    }`}
+                                    onClick={() =>
+                                      markDeleteEditRow(i)
+                                    }
                                   >
-                                    {r._deleted ? "Undo" : (r.id ? "Delete" : "Remove")}
+                                    {r._deleted
+                                      ? "Undo"
+                                      : r.id
+                                      ? "Delete"
+                                      : "Remove"}
                                   </button>
-                                  {Object.keys(e).length>0 && !r._deleted && (
-                                    <div className="text-[11px] text-red-600 mt-1">{rowErrText(e)}</div>
-                                  )}
+                                  {Object.keys(e).length > 0 &&
+                                    !r._deleted && (
+                                      <div className="text-[11px] text-red-600 mt-1">
+                                        {rowErrText(e)}
+                                      </div>
+                                    )}
                                 </td>
                               </tr>
                             );
@@ -651,7 +881,12 @@ export default function GradeScaleManager() {
                         </tbody>
                       </table>
                       <div className="mt-2">
-                        <button onClick={addEditRow} className="px-3 py-1 border rounded text-xs">Add band</button>
+                        <button
+                          onClick={addEditRow}
+                          className="px-3 py-1 border rounded text-xs"
+                        >
+                          Add band
+                        </button>
                       </div>
                     </div>
                   )}

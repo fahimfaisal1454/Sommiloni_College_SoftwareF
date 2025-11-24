@@ -41,6 +41,13 @@ export default function AdminMarksViewer() {
   // track inline validation (subject_id -> error string | undefined)
   const [fieldErrors, setFieldErrors] = useState({});     // { [subject_id]: "Score must be 0-100" }
 
+  // exam subject configs: full marks per subject for this exam
+  // shape: { [subjectId]: { full_cq, full_mcq, full_practical, total } }
+  const [examConfigs, setExamConfigs] = useState({});
+
+  // active grade scale bands (0–100): [{min_score, max_score, letter, gpa}, ...]
+  const [gradeBands, setGradeBands] = useState([]);
+
   /* --------------------- Helpers --------------------- */
   const isValidScore = (val) => {
     if (val === "" || val === null || val === undefined) return true; // empty is allowed in UI (means don't change)
@@ -58,6 +65,34 @@ export default function AdminMarksViewer() {
     return String(n);
   };
 
+  // Apply grade bands on a percentage (0–100) and return {letter, gpa}
+  const gradeFromPercentage = (percent) => {
+    if (
+      !gradeBands.length ||
+      percent === null ||
+      percent === undefined ||
+      Number.isNaN(percent)
+    ) {
+      return { letter: "—", gpa: "—" };
+    }
+    const p = Number(percent);
+    for (const band of gradeBands) {
+      const min = Number(band.min_score);
+      const max = Number(band.max_score);
+      if (!Number.isFinite(min) || !Number.isFinite(max)) continue;
+      if (p >= min && p <= max) {
+        return {
+          letter: band.letter || "—",
+          gpa:
+            band.gpa === null || band.gpa === undefined
+              ? "—"
+              : band.gpa,
+        };
+      }
+    }
+    return { letter: "—", gpa: "—" };
+  };
+
   /* --------------------- Fetch years (like ExamsAdmin) --------------------- */
   useEffect(() => {
     (async () => {
@@ -72,6 +107,25 @@ export default function AdminMarksViewer() {
       } catch {
         toast.error("Failed to load years");
         setYears([]);
+      }
+    })();
+  }, []);
+
+  /* --------------------- Fetch active grade scale once --------------------- */
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await AxiosInstance.get("grade-scales/");
+        const list = Array.isArray(res.data) ? res.data : res.data?.results || [];
+        const active = list.find((s) => s.is_active) || list[0];
+        if (active && Array.isArray(active.bands)) {
+          setGradeBands(active.bands);
+        } else {
+          setGradeBands([]);
+        }
+      } catch {
+        // not critical, but grading by percentage won't work without it
+        setGradeBands([]);
       }
     })();
   }, []);
@@ -94,6 +148,7 @@ export default function AdminMarksViewer() {
       setEditedMarks({});
       setStudentMarkIds({});
       setFieldErrors({});
+      setExamConfigs({});
       return;
     }
     (async () => {
@@ -129,6 +184,7 @@ export default function AdminMarksViewer() {
     setEditedMarks({});
     setStudentMarkIds({});
     setFieldErrors({});
+    setExamConfigs({});
   }, [classId, classes]);
 
   /* --------------------- Load exams (year + class + section) --------------------- */
@@ -142,12 +198,45 @@ export default function AdminMarksViewer() {
         const { data } = await AxiosInstance.get("exams/", {
           params: { year, class_name: Number(classId), section: Number(sectionId) },
         });
-        setExams(Array.isArray(data) ? data : []);
+        const list = Array.isArray(data) ? data : data?.results || [];
+        setExams(list);
       } catch {
         setExams([]);
       }
     })();
   }, [year, classId, sectionId]);
+
+  /* --------------------- Load exam subject configs (full marks per subject) ---- */
+  useEffect(() => {
+    (async () => {
+      setExamConfigs({});
+      if (!examId) return;
+      try {
+        const { data } = await AxiosInstance.get("exam-subject-configs/", {
+          params: { exam: examId },
+        });
+        const arr = Array.isArray(data) ? data : data?.results || [];
+        const map = {};
+        arr.forEach((cfg) => {
+          const sid = String(cfg.subject_id ?? cfg.subject);
+          if (!sid) return;
+          const full_cq = Number(cfg.full_cq || 0);
+          const full_mcq = Number(cfg.full_mcq || 0);
+          const full_practical = Number(cfg.full_practical || 0);
+          map[sid] = {
+            full_cq,
+            full_mcq,
+            full_practical,
+            total: full_cq + full_mcq + full_practical,
+          };
+        });
+        setExamConfigs(map);
+      } catch {
+        // if this fails, we'll still show totals but percentage-based grading won't have full marks
+        setExamConfigs({});
+      }
+    })();
+  }, [examId]);
 
   /* --------------------- Subject→Teacher map (timetable/ then subjects/) --------------------- */
   useEffect(() => {
@@ -246,7 +335,7 @@ export default function AdminMarksViewer() {
         const { data } = await AxiosInstance.get("exam-marks/", {
           params: { exam: Number(examId) },
         });
-        setMarks(Array.isArray(data) ? data : []);
+        setMarks(Array.isArray(data) ? data : data?.results || []);
       } catch {
         toast.error("Failed to load marks.");
         setMarks([]);
@@ -330,11 +419,29 @@ export default function AdminMarksViewer() {
         const sid = String(m.subject_id ?? m.subject?.id ?? m.subject);
         if (!sid) continue;
         idBySubject[sid] = m.id;
+
+        const rawTotal =
+          m.score !== null && m.score !== undefined ? Number(m.score) : null;
+        const cfg = examConfigs[sid];
+        const fullTotal =
+          cfg && Number.isFinite(cfg.total) && cfg.total > 0 ? cfg.total : null;
+
+        let letter = m.letter ?? m.grade_letter ?? "—";
+        let gpa = m.gpa ?? "—";
+
+        // If we know full marks, apply grading on percentage
+        if (rawTotal !== null && fullTotal) {
+          const percent = (rawTotal / fullTotal) * 100;
+          const graded = gradeFromPercentage(percent);
+          if (graded.letter !== "—") letter = graded.letter;
+          if (graded.gpa !== "—") gpa = graded.gpa;
+        }
+
         markBySubject.set(sid, {
           id: m.id,
-          score: m.score,
-          letter: m.letter ?? m.grade_letter ?? "—",
-          gpa: m.gpa ?? "—",
+          score: rawTotal,
+          letter,
+          gpa,
           teacher_name:
             m.teacher_name || m.teacher?.name || subjectTeachers[sid]?.teacher_name || "—",
           subject_name:
@@ -367,7 +474,7 @@ export default function AdminMarksViewer() {
 
       const init = {};
       for (const r of rows) {
-        init[r.subject_id] = r.score === "—" ? "" : String(r.score);
+        init[r.subject_id] = r.score === "—" || r.score === null ? "" : String(r.score);
       }
       setEditedMarks(init);
     } catch {
@@ -603,7 +710,7 @@ export default function AdminMarksViewer() {
                 <thead>
                   <tr className="bg-slate-100 border-b">
                     <th className="px-2 py-1 text-left">Subject</th>
-                    <th className="px-2 py-1 text-center">Marks</th>
+                    <th className="px-2 py-1 text-center">Marks (raw total)</th>
                     <th className="px-2 py-1 text-center">Letter</th>
                     <th className="px-2 py-1 text-center">GPA</th>
                     <th className="px-2 py-1 text-left">Teacher</th>

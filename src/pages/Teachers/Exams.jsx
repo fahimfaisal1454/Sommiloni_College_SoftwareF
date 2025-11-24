@@ -4,7 +4,7 @@ import AxiosInstance from "../../components/AxiosInstance";
 import { toast, Toaster } from "react-hot-toast";
 
 export default function EnterMarks() {
-  // dropdown options derived from teacher timetable
+  // timetable-derived options
   const [teachRows, setTeachRows] = useState([]);
   const [classes, setClasses] = useState([]);
   const [sections, setSections] = useState([]);
@@ -17,23 +17,27 @@ export default function EnterMarks() {
   const [subjectId, setSubjectId] = useState("");
   const [examId, setExamId] = useState("");
 
-  // students in class/section
+  // students
   const [students, setStudents] = useState([]);
   const [loadingStudents, setLoadingStudents] = useState(false);
 
-  // admin full-marks config for this exam+subject
-  const [config, setConfig] = useState(null); // { full_cq, full_mcq, full_practical, total }
+  // exam+subject full marks config
+  // { full_cq, full_mcq, full_practical, total }
+  const [config, setConfig] = useState(null);
   const [loadingConfig, setLoadingConfig] = useState(false);
 
-  // marks typed in UI: { [studentId]: { cq: "", mcq: "", practical: "" } }
+  // active grade scale (percentage based)
+  const [gradeScale, setGradeScale] = useState(null); // { id, name, bands: [{min_score,max_score,letter,gpa}] }
+  const [loadingScale, setLoadingScale] = useState(false);
+
+  // UI marks: { [studentId]: { cq:"", mcq:"", practical:"" } }
   const [marks, setMarks] = useState({});
 
-  // existing saved marks from backend:
-  // { [studentId]: { id, cq, mcq, practical, total, letter, gpa } }
+  // saved marks: { [studentId]: { id, cq, mcq, practical, total } }
   const [existingMarks, setExistingMarks] = useState({});
 
   // ───────────────────────────────────────────────────────────
-  // Helpers
+  // helpers / derived
   // ───────────────────────────────────────────────────────────
   const currentClass = useMemo(
     () => classes.find((c) => String(c.id) === String(classId)),
@@ -52,9 +56,14 @@ export default function EnterMarks() {
     [exams, examId]
   );
 
-  const hasCQ = config && config.full_cq > 0;
-  const hasMCQ = config && config.full_mcq > 0;
-  const hasPractical = config && config.full_practical > 0;
+  const hasCQ = !!(config && config.full_cq > 0);
+  const hasMCQ = !!(config && config.full_mcq > 0);
+  const hasPractical = !!(config && config.full_practical > 0);
+
+  const componentCount =
+    (hasCQ ? 1 : 0) + (hasMCQ ? 1 : 0) + (hasPractical ? 1 : 0);
+  // Fixed columns: No, Name, Roll, Sub, Total, Obtain, Letter, GPA = 8
+  const tableColSpan = 8 + componentCount;
 
   const fullMarksText = useMemo(() => {
     if (!config) return "Full marks not configured for this exam & subject.";
@@ -66,32 +75,34 @@ export default function EnterMarks() {
   }, [config, hasCQ, hasMCQ, hasPractical]);
 
   const computeRowTotal = (m) => {
-    if (!m) return "";
+    if (!m) return 0;
     const cq = hasCQ ? Number(m.cq || 0) : 0;
     const mcq = hasMCQ ? Number(m.mcq || 0) : 0;
     const prac = hasPractical ? Number(m.practical || 0) : 0;
     const total = cq + mcq + prac;
-    return total ? total : "";
+    return Number.isNaN(total) ? 0 : total;
   };
 
   const handlePartChange = (studentId, part, value) => {
-    const raw = value === "" ? "" : Number(value);
-    if (raw === "") {
+    const rawStr = value ?? "";
+    if (rawStr === "") {
       setMarks((prev) => ({
         ...prev,
         [studentId]: { ...(prev[studentId] || {}), [part]: "" },
       }));
       return;
     }
+    const raw = Number(rawStr);
+    if (Number.isNaN(raw)) return;
 
     let max = null;
     if (part === "cq" && hasCQ) max = config.full_cq;
     if (part === "mcq" && hasMCQ) max = config.full_mcq;
     if (part === "practical" && hasPractical) max = config.full_practical;
 
-    let val = isNaN(raw) ? "" : raw;
-    if (max != null && val > max) val = max;
+    let val = raw;
     if (val < 0) val = 0;
+    if (max != null && val > max) val = max;
 
     setMarks((prev) => ({
       ...prev,
@@ -99,8 +110,34 @@ export default function EnterMarks() {
     }));
   };
 
+  const hardResetMarks = () => {
+    setMarks({});
+    setExistingMarks({});
+    setConfig(null);
+  };
+
+  // convert obtain & total to letter/gpa using percentage bands
+  const gradeFor = (obtain) => {
+    if (!gradeScale || !Array.isArray(gradeScale.bands) || !config || !config.total)
+      return { letter: "", gpa: "" };
+
+    const total = config.total;
+    if (!total || obtain == null) return { letter: "", gpa: "" };
+
+    const perc = (Number(obtain) / Number(total)) * 100;
+    if (Number.isNaN(perc)) return { letter: "", gpa: "" };
+
+    const band = gradeScale.bands.find(
+      (b) =>
+        perc >= Number(b.min_score ?? 0) &&
+        perc <= Number(b.max_score ?? 100)
+    );
+    if (!band) return { letter: "", gpa: "" };
+    return { letter: band.letter ?? "", gpa: band.gpa ?? "" };
+  };
+
   // ───────────────────────────────────────────────────────────
-  // 1) Load teacher timetable to know which class/section/subject they teach
+  // 1) load timetable
   // ───────────────────────────────────────────────────────────
   useEffect(() => {
     (async () => {
@@ -139,7 +176,7 @@ export default function EnterMarks() {
     })();
   }, []);
 
-  // 2) Classes available from timetable
+  // 2) classes from timetable
   useEffect(() => {
     const byClass = new Map();
     for (const r of teachRows) {
@@ -150,7 +187,7 @@ export default function EnterMarks() {
     setClasses(cls);
   }, [teachRows]);
 
-  // 3) Sections when class changes
+  // 3) sections on class change
   useEffect(() => {
     const bySec = new Map();
     for (const r of teachRows) {
@@ -165,12 +202,10 @@ export default function EnterMarks() {
     setSubjectId("");
     setExamId("");
     setStudents([]);
-    setMarks({});
-    setExistingMarks({});
-    setConfig(null);
+    hardResetMarks();
   }, [classId, teachRows]);
 
-  // 4) Subjects when section changes
+  // 4) subjects on section change
   useEffect(() => {
     const bySub = new Map();
     for (const r of teachRows) {
@@ -184,12 +219,10 @@ export default function EnterMarks() {
 
     setSubjectId("");
     setExamId("");
-    setMarks({});
-    setExistingMarks({});
-    setConfig(null);
+    hardResetMarks();
   }, [classId, sectionId, teachRows]);
 
-  // 5) Load exams for selected class+section
+  // 5) exams for class+section
   useEffect(() => {
     (async () => {
       if (!classId || !sectionId) {
@@ -209,13 +242,12 @@ export default function EnterMarks() {
     })();
   }, [classId, sectionId]);
 
-  // 6) Load students for selected class+section
+  // 6) students for class+section
   useEffect(() => {
     (async () => {
       if (!classId || !sectionId) {
         setStudents([]);
-        setMarks({});
-        setExistingMarks({});
+        hardResetMarks();
         return;
       }
       setLoadingStudents(true);
@@ -235,7 +267,27 @@ export default function EnterMarks() {
     })();
   }, [classId, sectionId]);
 
-  // 7) Load admin config for this exam+subject
+  // 7) active grade scale (percentage)
+  useEffect(() => {
+    (async () => {
+      setLoadingScale(true);
+      try {
+        const res = await AxiosInstance.get("grade-scales/", {
+          params: { is_active: true },
+        });
+        const arr = Array.isArray(res.data) ? res.data : res.data?.results || [];
+        const scale = arr[0] || null;
+        setGradeScale(scale);
+      } catch (err) {
+        console.error(err);
+        setGradeScale(null);
+      } finally {
+        setLoadingScale(false);
+      }
+    })();
+  }, []);
+
+  // 8) full marks config for exam+subject
   useEffect(() => {
     (async () => {
       if (!examId || !subjectId) {
@@ -271,11 +323,12 @@ export default function EnterMarks() {
     })();
   }, [examId, subjectId]);
 
-  // 8) Load existing marks for exam+subject and prefill inputs
+  // 9) existing marks for exam+subject
   useEffect(() => {
     (async () => {
       if (!examId || !subjectId) {
         setExistingMarks({});
+        setMarks({});
         return;
       }
       try {
@@ -293,8 +346,6 @@ export default function EnterMarks() {
             mcq: m.score_mcq,
             practical: m.score_practical,
             total: m.score,
-            letter: m.letter,
-            gpa: m.gpa,
           };
           initial[sid] = {
             cq: m.score_cq != null ? String(m.score_cq) : "",
@@ -303,7 +354,7 @@ export default function EnterMarks() {
           };
         });
         setExistingMarks(map);
-        setMarks((prev) => ({ ...prev, ...initial }));
+        setMarks(initial); // overwrite with existing for clean refresh
       } catch (err) {
         console.error(err);
         setExistingMarks({});
@@ -311,8 +362,20 @@ export default function EnterMarks() {
     })();
   }, [examId, subjectId]);
 
+  // when subject/exam changed by user, immediately clear marks so UI refreshes
+  const onSubjectChange = (val) => {
+    setSubjectId(val);
+    setExamId("");
+    hardResetMarks();
+  };
+
+  const onExamChange = (val) => {
+    setExamId(val);
+    hardResetMarks();
+  };
+
   // ───────────────────────────────────────────────────────────
-  // Save marks
+  // save
   // ───────────────────────────────────────────────────────────
   const handleSave = async () => {
     if (!classId || !sectionId || !subjectId || !examId) {
@@ -324,34 +387,34 @@ export default function EnterMarks() {
       return;
     }
 
-    const payloads = students.map((stu) => {
-      const m = marks[stu.id] || {};
-      const cq = hasCQ && m.cq !== "" ? Number(m.cq) : null;
-      const mcq = hasMCQ && m.mcq !== "" ? Number(m.mcq) : null;
-      const prac = hasPractical && m.practical !== "" ? Number(m.practical) : null;
+    const payloads = students
+      .map((stu) => {
+        const m = marks[stu.id] || {};
+        const cq = hasCQ && m.cq !== "" ? Number(m.cq) : null;
+        const mcq = hasMCQ && m.mcq !== "" ? Number(m.mcq) : null;
+        const prac = hasPractical && m.practical !== "" ? Number(m.practical) : null;
+        if (cq === null && mcq === null && prac === null) return null;
 
-      if (cq === null && mcq === null && prac === null) return null;
+        const clamp = (val, max) => {
+          if (val == null || Number.isNaN(val)) return null;
+          if (val < 0) return 0;
+          if (max != null && val > max) return max;
+          return val;
+        };
 
-      // clamp once more on send
-      const safe = (val, max) => {
-        if (val == null || isNaN(val)) return null;
-        if (val < 0) return 0;
-        if (max != null && val > max) return max;
-        return val;
-      };
-
-      return {
-        studentId: stu.id,
-        body: {
-          exam: Number(examId),
-          student: Number(stu.id),
-          subject: Number(subjectId),
-          score_cq: safe(cq, config.full_cq),
-          score_mcq: safe(mcq, config.full_mcq),
-          score_practical: safe(prac, config.full_practical),
-        },
-      };
-    }).filter(Boolean);
+        return {
+          studentId: stu.id,
+          body: {
+            exam: Number(examId),
+            student: Number(stu.id),
+            subject: Number(subjectId),
+            score_cq: clamp(cq, config.full_cq),
+            score_mcq: clamp(mcq, config.full_mcq),
+            score_practical: clamp(prac, config.full_practical),
+          },
+        };
+      })
+      .filter(Boolean);
 
     if (!payloads.length) {
       toast("Nothing to save.");
@@ -384,7 +447,7 @@ export default function EnterMarks() {
       toast.success(`Saved ${ok} marks.`, { duration: 4000 });
     }
 
-    // reload existing marks so letter/GPA updates and rows stay in sync
+    // reload marks to sync totals
     try {
       const res = await AxiosInstance.get("exam-marks/", {
         params: { exam: examId, subject: subjectId },
@@ -399,8 +462,6 @@ export default function EnterMarks() {
           mcq: m.score_mcq,
           practical: m.score_practical,
           total: m.score,
-          letter: m.letter,
-          gpa: m.gpa,
         };
       });
       setExistingMarks(map);
@@ -418,10 +479,10 @@ export default function EnterMarks() {
 
       <h1 className="text-xl font-bold">Enter Exam Marks</h1>
 
-      {/* Filters */}
+      {/* filters */}
       <div className="bg-white border rounded-md p-4 space-y-3">
         <div className="grid md:grid-cols-4 gap-3">
-          {/* Class */}
+          {/* class */}
           <div>
             <label className="text-sm font-semibold">Class</label>
             <select
@@ -438,7 +499,7 @@ export default function EnterMarks() {
             </select>
           </div>
 
-          {/* Section */}
+          {/* section */}
           <div>
             <label className="text-sm font-semibold">Section</label>
             <select
@@ -456,12 +517,12 @@ export default function EnterMarks() {
             </select>
           </div>
 
-          {/* Subject */}
+          {/* subject */}
           <div>
             <label className="text-sm font-semibold">Subject</label>
             <select
               value={subjectId}
-              onChange={(e) => setSubjectId(e.target.value)}
+              onChange={(e) => onSubjectChange(e.target.value)}
               disabled={!classId || !sectionId}
               className="w-full border rounded px-2 py-1 bg-white disabled:bg-slate-100"
             >
@@ -474,12 +535,12 @@ export default function EnterMarks() {
             </select>
           </div>
 
-          {/* Exam */}
+          {/* exam */}
           <div>
             <label className="text-sm font-semibold">Exam</label>
             <select
               value={examId}
-              onChange={(e) => setExamId(e.target.value)}
+              onChange={(e) => onExamChange(e.target.value)}
               disabled={!classId || !sectionId}
               className="w-full border rounded px-2 py-1 bg-white disabled:bg-slate-100"
             >
@@ -493,34 +554,37 @@ export default function EnterMarks() {
           </div>
         </div>
 
-        <div className="text-xs text-slate-600 mt-1">
-          {currentClass && currentSection && (
-            <>
-              Class <b>{currentClass.name}</b>, Section{" "}
-              <b>{currentSection.name}</b>
-            </>
-          )}
-          {currentSubject && (
-            <>
-              {" "}
-              | Subject: <b>{currentSubject.name}</b>
-            </>
-          )}
-          {currentExam && (
-            <>
-              {" "}
-              | Exam: <b>{currentExam.name}</b>
-            </>
-          )}
+        <div className="text-xs text-slate-600 mt-1 space-y-0.5">
+          <div>
+            {currentClass && currentSection && (
+              <>
+                Class <b>{currentClass.name}</b>, Section{" "}
+                <b>{currentSection.name}</b>
+              </>
+            )}
+            {currentSubject && (
+              <>
+                {" "}
+                | Subject: <b>{currentSubject.name}</b>
+              </>
+            )}
+            {currentExam && (
+              <>
+                {" "}
+                | Exam: <b>{currentExam.name}</b>
+              </>
+            )}
+          </div>
           {examId && subjectId && (
             <div className="text-[11px] text-slate-500">
               {loadingConfig ? "Loading full marks…" : fullMarksText}
+              {loadingScale && " • Loading grade scale…"}
             </div>
           )}
         </div>
       </div>
 
-      {/* Marks table – layout to mimic your screenshot */}
+      {/* marks table */}
       <div className="bg-white border rounded-md p-4 overflow-x-auto">
         {(!classId || !sectionId || !subjectId || !examId) && (
           <div className="text-sm text-slate-500">
@@ -545,24 +609,31 @@ export default function EnterMarks() {
             <>
               <table className="w-full border border-black text-xs">
                 <thead>
-                  {/* Title row like: Year Final */}
+                  {/* title row */}
                   <tr>
                     <th
-                      colSpan={11}
+                      colSpan={tableColSpan}
                       className="border border-black text-center py-2 text-sm font-semibold"
                     >
                       {currentExam?.name || "Exam"}
                     </th>
                   </tr>
-                  {/* Header row like screenshot */}
+
+                  {/* header row */}
                   <tr className="bg-gray-50">
                     <th className="border border-black px-2 py-1">No</th>
                     <th className="border border-black px-2 py-1">Name</th>
                     <th className="border border-black px-2 py-1">Roll</th>
                     <th className="border border-black px-2 py-1">Sub</th>
-                    <th className="border border-black px-2 py-1">CQ</th>
-                    <th className="border border-black px-2 py-1">MCQ</th>
-                    <th className="border border-black px-2 py-1">Prac</th>
+                    {hasCQ && (
+                      <th className="border border-black px-2 py-1">CQ</th>
+                    )}
+                    {hasMCQ && (
+                      <th className="border border-black px-2 py-1">MCQ</th>
+                    )}
+                    {hasPractical && (
+                      <th className="border border-black px-2 py-1">Prac</th>
+                    )}
                     <th className="border border-black px-2 py-1">
                       Total mark
                     </th>
@@ -580,8 +651,11 @@ export default function EnterMarks() {
 
                     const obtain =
                       existing?.total != null
-                        ? existing.total
+                        ? Number(existing.total)
                         : computeRowTotal(rowMarks);
+
+                    const { letter, gpa } =
+                      obtain > 0 ? gradeFor(obtain) : { letter: "", gpa: "" };
 
                     return (
                       <tr key={stu.id}>
@@ -589,7 +663,10 @@ export default function EnterMarks() {
                           {index + 1}
                         </td>
                         <td className="border border-black px-2 py-1">
-                          {stu.full_name || `${stu.first_name} ${stu.last_name}`}
+                          {stu.full_name ||
+                            [stu.first_name, stu.last_name]
+                              .filter(Boolean)
+                              .join(" ")}
                         </td>
                         <td className="border border-black px-2 py-1 text-center">
                           {stu.roll_number ?? ""}
@@ -597,67 +674,74 @@ export default function EnterMarks() {
                         <td className="border border-black px-2 py-1 text-center">
                           {currentSubject?.name || ""}
                         </td>
-                        {/* CQ */}
-                        <td className="border border-black px-2 py-1 text-center">
-                          <input
-                            type="number"
-                            min={0}
-                            max={config?.full_cq ?? undefined}
-                            value={rowMarks.cq ?? ""}
-                            onChange={(e) =>
-                              handlePartChange(stu.id, "cq", e.target.value)
-                            }
-                            disabled={!hasCQ}
-                            className="w-16 border px-1 py-0.5 text-xs bg-blue-50"
-                          />
-                        </td>
-                        {/* MCQ */}
-                        <td className="border border-black px-2 py-1 text-center">
-                          <input
-                            type="number"
-                            min={0}
-                            max={config?.full_mcq ?? undefined}
-                            value={rowMarks.mcq ?? ""}
-                            onChange={(e) =>
-                              handlePartChange(stu.id, "mcq", e.target.value)
-                            }
-                            disabled={!hasMCQ}
-                            className="w-16 border px-1 py-0.5 text-xs bg-blue-50"
-                          />
-                        </td>
-                        {/* Practical */}
-                        <td className="border border-black px-2 py-1 text-center">
-                          <input
-                            type="number"
-                            min={0}
-                            max={config?.full_practical ?? undefined}
-                            value={rowMarks.practical ?? ""}
-                            onChange={(e) =>
-                              handlePartChange(
-                                stu.id,
-                                "practical",
-                                e.target.value
-                              )
-                            }
-                            disabled={!hasPractical}
-                            className="w-16 border px-1 py-0.5 text-xs bg-blue-50"
-                          />
-                        </td>
-                        {/* Total full mark */}
+
+                        {hasCQ && (
+                          <td className="border border-black px-2 py-1 text-center">
+                            <input
+                              type="number"
+                              min={0}
+                              max={config?.full_cq ?? undefined}
+                              value={rowMarks.cq ?? ""}
+                              onChange={(e) =>
+                                handlePartChange(stu.id, "cq", e.target.value)
+                              }
+                              className="w-16 border px-1 py-0.5 text-xs bg-blue-50"
+                            />
+                          </td>
+                        )}
+
+                        {hasMCQ && (
+                          <td className="border border-black px-2 py-1 text-center">
+                            <input
+                              type="number"
+                              min={0}
+                              max={config?.full_mcq ?? undefined}
+                              value={rowMarks.mcq ?? ""}
+                              onChange={(e) =>
+                                handlePartChange(stu.id, "mcq", e.target.value)
+                              }
+                              className="w-16 border px-1 py-0.5 text-xs bg-blue-50"
+                            />
+                          </td>
+                        )}
+
+                        {hasPractical && (
+                          <td className="border border-black px-2 py-1 text-center">
+                            <input
+                              type="number"
+                              min={0}
+                              max={config?.full_practical ?? undefined}
+                              value={rowMarks.practical ?? ""}
+                              onChange={(e) =>
+                                handlePartChange(
+                                  stu.id,
+                                  "practical",
+                                  e.target.value
+                                )
+                              }
+                              className="w-16 border px-1 py-0.5 text-xs bg-blue-50"
+                            />
+                          </td>
+                        )}
+
+                        {/* full total */}
                         <td className="border border-black px-2 py-1 text-center">
                           {config?.total ?? ""}
                         </td>
-                        {/* Obtain mark */}
+
+                        {/* obtain mark */}
                         <td className="border border-black px-2 py-1 text-center">
-                          {obtain ?? ""}
+                          {obtain ? obtain.toFixed(2).replace(/\.00$/, "") : ""}
                         </td>
-                        {/* Letter */}
+
+                        {/* letter (computed from percentage) */}
                         <td className="border border-black px-2 py-1 text-center">
-                          {existing?.letter || ""}
+                          {letter}
                         </td>
-                        {/* GPA */}
+
+                        {/* GPA (computed from percentage) */}
                         <td className="border border-black px-2 py-1 text-center">
-                          {existing?.gpa != null ? existing.gpa : ""}
+                          {gpa !== "" ? Number(gpa).toFixed(2) : ""}
                         </td>
                       </tr>
                     );
