@@ -7,11 +7,14 @@ const AcademicYear = () => {
   const [yearInput, setYearInput] = useState("");
   const [loading, setLoading] = useState(false);
 
+  const [editId, setEditId] = useState(null);
+  const [editYear, setEditYear] = useState("");
+
   const fetchYears = async () => {
     try {
       const res = await AxiosInstance.get("/academic-years/");
       setYears(res.data);
-    } catch (err) {
+    } catch {
       toast.error("Failed to load academic years");
     }
   };
@@ -36,7 +39,7 @@ const AcademicYear = () => {
       toast.success("Academic year added");
       setYearInput("");
       fetchYears();
-    } catch (err) {
+    } catch {
       toast.error("Year already exists or invalid");
     } finally {
       setLoading(false);
@@ -51,8 +54,49 @@ const AcademicYear = () => {
       });
       toast.success("Active year updated");
       fetchYears();
-    } catch (err) {
+    } catch {
       toast.error("Failed to update year");
+    }
+  };
+
+  // Start edit
+  const startEdit = (year) => {
+    setEditId(year.id);
+    setEditYear(year.year);
+  };
+
+  // Save edit
+  const saveEdit = async () => {
+    if (!editYear) {
+      toast.error("Year cannot be empty");
+      return;
+    }
+
+    try {
+      await AxiosInstance.patch(`/academic-years/${editId}/`, {
+        year: Number(editYear),
+      });
+      toast.success("Academic year updated");
+      setEditId(null);
+      setEditYear("");
+      fetchYears();
+    } catch {
+      toast.error("Update failed");
+    }
+  };
+
+  // Delete year
+  const deleteYear = async (id) => {
+    if (!window.confirm("Are you sure you want to delete this academic year?")) {
+      return;
+    }
+
+    try {
+      await AxiosInstance.delete(`/academic-years/${id}/`);
+      toast.success("Academic year deleted");
+      fetchYears();
+    } catch {
+      toast.error("Cannot delete active or used year");
     }
   };
 
@@ -85,13 +129,25 @@ const AcademicYear = () => {
             <tr>
               <th>Year</th>
               <th>Status</th>
-              <th>Action</th>
+              <th className="text-right">Actions</th>
             </tr>
           </thead>
           <tbody>
             {years.map((y) => (
               <tr key={y.id}>
-                <td>{y.year}</td>
+                <td>
+                  {editId === y.id ? (
+                    <input
+                      type="number"
+                      value={editYear}
+                      onChange={(e) => setEditYear(e.target.value)}
+                      className="input input-sm input-bordered w-28"
+                    />
+                  ) : (
+                    y.year
+                  )}
+                </td>
+
                 <td>
                   {y.is_active ? (
                     <span className="badge badge-success">Active</span>
@@ -99,18 +155,51 @@ const AcademicYear = () => {
                     <span className="badge badge-ghost">Inactive</span>
                   )}
                 </td>
-                <td>
-                  {!y.is_active && (
-                    <button
-                      onClick={() => setActiveYear(y.id)}
-                      className="btn btn-xs btn-outline"
-                    >
-                      Set Active
-                    </button>
+
+                <td className="text-right space-x-2">
+                  {editId === y.id ? (
+                    <>
+                      <button
+                        onClick={saveEdit}
+                        className="btn btn-xs btn-success"
+                      >
+                        Save
+                      </button>
+                      <button
+                        onClick={() => setEditId(null)}
+                        className="btn btn-xs"
+                      >
+                        Cancel
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      {!y.is_active && (
+                        <button
+                          onClick={() => setActiveYear(y.id)}
+                          className="btn btn-xs btn-outline"
+                        >
+                          Set Active
+                        </button>
+                      )}
+                      <button
+                        onClick={() => startEdit(y)}
+                        className="btn btn-xs btn-warning"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        onClick={() => deleteYear(y.id)}
+                        className="btn btn-xs btn-error"
+                      >
+                        Delete
+                      </button>
+                    </>
                   )}
                 </td>
               </tr>
             ))}
+
             {years.length === 0 && (
               <tr>
                 <td colSpan="3" className="text-center text-gray-400">
