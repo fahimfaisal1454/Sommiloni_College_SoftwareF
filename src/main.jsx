@@ -81,7 +81,7 @@ import StudentTimetable from "./pages/Students/MyTimetable.jsx";
 import StudentResults from "./pages/Students/MyResults.jsx";
 import StudentNotices from "./pages/Students/Notices.jsx";
 import StudentAssignments from "./pages/Students/Assignments.jsx";
-
+import AcademicYear from "./pages/Admin/AcademicYear.jsx";
 
 
 // Define the router
@@ -139,6 +139,7 @@ const router = createBrowserRouter([
         path: "/acknowledgment",
         element: <Acknowledgment />,
       },
+
     ],
   },
 
@@ -166,7 +167,10 @@ const router = createBrowserRouter([
       { path: "add-result", element: <ResultManager /> },
       { path: "users", element: <ManageUsers /> },
       { path: "rooms", element: <ManageClassrooms /> },
-    
+            {
+        path: "academic-year",
+        element: <AcademicYear />,
+      },
 
       { path: "add-section", element: <AddSection /> },
       { path: "assigned-subjects", element: <AssignedSubjects /> },

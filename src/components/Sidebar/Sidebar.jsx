@@ -215,22 +215,31 @@ export default function Sidebar() {
           >
             {/* Group 1: Setup */}
             <SectionLabel>Setup</SectionLabel>
-            <NavLink to="/dashboard/add-section" className={navLinkStyle}>
-              <MdClass className="text-lg" />
-              {!collapsed && "Add Section"}
-            </NavLink>
-            <NavLink to="/dashboard/add-class" className={navLinkStyle}>
-              <MdClass className="text-lg" />
-              {!collapsed && "Add Class"}
-            </NavLink>
-            <NavLink to="/dashboard/add-subject" className={navLinkStyle}>
-              <MdLibraryBooks className="text-lg" />
-              {!collapsed && "Add Subject"}
-            </NavLink>
-            <NavLink to="/dashboard/assigned-subjects" className={navLinkStyle}>
-              <MdLibraryBooks className="text-lg" />
-              {!collapsed && "Assign Subject"}
-            </NavLink>
+
+<NavLink to="/dashboard/academic-year" className={navLinkStyle}>
+  <FaRegCalendarAlt className="text-lg" />
+  {!collapsed && "Academic Year"}
+</NavLink>
+
+<NavLink to="/dashboard/add-class" className={navLinkStyle}>
+  <MdClass className="text-lg" />
+  {!collapsed && "Add Class"}
+</NavLink>
+
+<NavLink to="/dashboard/add-section" className={navLinkStyle}>
+  <MdClass className="text-lg" />
+  {!collapsed && "Add Section"}
+</NavLink>
+
+<NavLink to="/dashboard/add-subject" className={navLinkStyle}>
+  <MdLibraryBooks className="text-lg" />
+  {!collapsed && "Add Subject"}
+</NavLink>
+
+<NavLink to="/dashboard/assigned-subjects" className={navLinkStyle}>
+  <MdLibraryBooks className="text-lg" />
+  {!collapsed && "Assign Subject"}
+</NavLink>
 
             <Divider />
 
