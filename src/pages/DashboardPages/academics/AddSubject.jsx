@@ -13,42 +13,76 @@ const Chip = ({ children }) => (
 export default function AddSubject() {
   const [subjects, setSubjects] = useState([]);
   const [classes, setClasses] = useState([]);
+  const [years, setYears] = useState([]);
 
-  // year controls (like AddClass)
-  const nowYear = new Date().getFullYear();
-  const [years, setYears] = useState([nowYear]);
-  const [selectedYear, setSelectedYear] = useState(nowYear);
-
+  const [selectedYearId, setSelectedYearId] = useState("");
   const [loading, setLoading] = useState(true);
 
-  // in-flight flags
   const [saving, setSaving] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
 
-  // form state (create/edit)
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [currentId, setCurrentId] = useState(null);
+
   const [form, setForm] = useState({
     name: "",
-    // create uses class_ids (multi), edit uses class_name (single)
     class_ids: [],
     class_name: "",
     is_theory: true,
     is_practical: false,
   });
 
-  // filters
   const [q, setQ] = useState("");
   const [classFilter, setClassFilter] = useState(null);
 
+  /* ---------- LOAD ACADEMIC YEARS ---------- */
+  const loadYears = async () => {
+    try {
+      const res = await axiosInstance.get("academic-years/");
+      setYears(res.data);
+      const active = res.data.find((y) => y.is_active);
+      setSelectedYearId(active?.id || res.data[0]?.id || "");
+    } catch {
+      toast.error("Failed to load academic years");
+    }
+  };
+
+  /* ---------- LOAD CLASSES + SUBJECTS BY YEAR ---------- */
+  const loadYearData = async (yearId) => {
+    if (!yearId) return;
+    setLoading(true);
+    try {
+      const [cRes, sRes] = await Promise.all([
+        axiosInstance.get("classes/", { params: { year: yearId } }),
+        axiosInstance.get("subjects/", { params: { year: yearId } }),
+      ]);
+
+      const cls = Array.isArray(cRes.data) ? cRes.data : cRes.data?.results || [];
+      const subs = Array.isArray(sRes.data) ? sRes.data : sRes.data?.results || [];
+
+      setClasses(cls);
+      setSubjects(subs);
+    } catch {
+      toast.error("Failed to load data");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadYears();
+  }, []);
+
+  useEffect(() => {
+    loadYearData(selectedYearId);
+    setClassFilter(null);
+  }, [selectedYearId]);
+
+  /* ---------- OPTIONS ---------- */
   const classOptions = useMemo(
-    () =>
-      (classes || []).map((c) => ({
-        value: c.id,
-        label: `${c.name}`, // name already tied to selectedYear
-      })),
+    () => classes.map((c) => ({ value: c.id, label: c.name })),
     [classes]
   );
 
@@ -58,77 +92,23 @@ export default function AddSubject() {
     return map;
   }, [classes]);
 
-  // -------- Year-aware loaders (like AddClass) --------
-  const loadYears = async () => {
-    try {
-      const res = await axiosInstance.get("classes/years/");
-      const serverYearsRaw = Array.isArray(res.data) ? res.data : [];
-      const serverYears = serverYearsRaw.map((y) => Number(y)).filter((y) => !isNaN(y));
-      const allYears = Array.from(new Set([...serverYears, nowYear])).sort((a, b) => b - a);
-      setYears(allYears);
-      setSelectedYear((prev) => (allYears.includes(prev) ? prev : allYears[0]));
-    } catch (e) {
-      console.error(e);
-      // fall back to current year
-      setYears([nowYear]);
-      setSelectedYear(nowYear);
-    }
-  };
-
-  const loadYearData = async (year) => {
-    // fetch both subjects and classes for the chosen year
-    setLoading(true);
-    try {
-      const [sRes, cRes] = await Promise.all([
-        axiosInstance.get("subjects/", { params: { year } }),
-        axiosInstance.get("classes/", { params: { year } }),
-      ]);
-
-      // classes sorted alpha
-      const clss = (Array.isArray(cRes.data) ? cRes.data : cRes.data?.results || []).sort(
-        (a, b) => (a.name || "").localeCompare(b.name || "")
-      );
-
-      // subjects sorted alpha
-      const subs = (Array.isArray(sRes.data) ? sRes.data : sRes.data?.results || []).sort(
-        (a, b) => (a.name || "").localeCompare(b.name || "")
-      );
-
-      setClasses(clss);
-      setSubjects(subs);
-    } catch (e) {
-      console.error(e);
-      toast.error(e?.response?.data?.detail || "Failed to load data");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // initial + years
-  useEffect(() => {
-    (async () => {
-      await loadYears();
-    })();
-  }, []);
-
-  // whenever selectedYear changes, load that year's data and reset class filter
-  useEffect(() => {
-    setClassFilter(null);
-    if (selectedYear) loadYearData(selectedYear);
-  }, [selectedYear]);
-
+  /* ---------- FILTER ---------- */
   const filtered = useMemo(() => {
     let data = [...subjects];
     if (q.trim()) {
-      const n = q.trim().toLowerCase();
-      data = data.filter((s) => (s.name || "").toLowerCase().includes(n));
+      data = data.filter((s) =>
+        (s.name || "").toLowerCase().includes(q.trim().toLowerCase())
+      );
     }
     if (classFilter?.value) {
-      data = data.filter((s) => String(s.class_name) === String(classFilter.value));
+      data = data.filter(
+        (s) => String(s.class_name) === String(classFilter.value)
+      );
     }
     return data;
   }, [subjects, q, classFilter]);
 
+  /* ---------- CREATE / EDIT ---------- */
   const openCreate = () => {
     setForm({
       name: "",
@@ -144,11 +124,11 @@ export default function AddSubject() {
 
   const openEdit = (row) => {
     setForm({
-      name: row.name || "",
-      class_ids: [], // not used in edit
-      class_name: row.class_name || "",
-      is_theory: !!row.is_theory,
-      is_practical: !!row.is_practical,
+      name: row.name,
+      class_ids: [],
+      class_name: row.class_name,
+      is_theory: row.is_theory,
+      is_practical: row.is_practical,
     });
     setIsEditing(true);
     setCurrentId(row.id);
@@ -157,92 +137,43 @@ export default function AddSubject() {
 
   const save = async (e) => {
     e.preventDefault();
-    const nameTrim = form.name.trim();
-    if (!nameTrim) return toast.error("Subject name is required");
+    if (!form.name.trim()) return toast.error("Subject name required");
 
-    if (isEditing) {
-      if (!form.class_name) return toast.error("Please select a class");
-      setUpdating(true);
-      try {
-        const payload = {
-          name: nameTrim,
-          class_name: form.class_name, // numeric class id
-          is_theory: !!form.is_theory,
-          is_practical: !!form.is_practical,
-        };
-        await axiosInstance.put(`subjects/${currentId}/`, payload);
-        toast.success("Subject updated");
-        setIsModalOpen(false);
-        await loadYearData(selectedYear);
-      } catch (e) {
-        console.error(e);
-        const msg =
-          e?.response?.data?.detail ||
-          (Array.isArray(e?.response?.data?.name)
-            ? e.response.data.name.join(", ")
-            : e?.response?.data?.name) ||
-          "Update failed";
-        toast.error(msg);
-      } finally {
-        setUpdating(false);
-      }
-      return;
-    }
-
-    // Create (multi-class) — classes are from the selected year
-    if (!form.class_ids.length) {
-      return toast.error("Please select at least one class");
-    }
-
-    setSaving(true);
     try {
-      // prevent duplicates for current year: (subject name, class) pair
-      const existingKey = new Set(
-        subjects.map(
-          (s) => `${String(s.class_name)}::${(s.name || "").toLowerCase()}`
-        )
-      );
+      isEditing ? setUpdating(true) : setSaving(true);
 
-      const targets = form.class_ids.map((opt) => opt?.value).filter(Boolean);
-      const toCreate = targets.filter(
-        (cid) => !existingKey.has(`${String(cid)}::${nameTrim.toLowerCase()}`)
-      );
-
-      if (toCreate.length === 0) {
-        toast("Nothing to create — all selected classes already have this subject.", { icon: "ℹ️" });
+      if (isEditing) {
+        await axiosInstance.put(`subjects/${currentId}/`, {
+          name: form.name.trim(),
+          class_name: form.class_name,
+          is_theory: form.is_theory,
+          is_practical: form.is_practical,
+        });
+        toast.success("Subject updated");
       } else {
+        if (!form.class_ids.length)
+          return toast.error("Select at least one class");
+
         await Promise.all(
-          toCreate.map((cid) =>
+          form.class_ids.map((c) =>
             axiosInstance.post("subjects/", {
-              name: nameTrim,
-              class_name: cid,
-              is_theory: !!form.is_theory,
-              is_practical: !!form.is_practical,
+              name: form.name.trim(),
+              class_name: c.value,
+              is_theory: form.is_theory,
+              is_practical: form.is_practical,
             })
           )
         );
-        const skipped = targets.length - toCreate.length;
-        toast.success(
-          `Created ${toCreate.length} ${toCreate.length > 1 ? "subjects" : "subject"}${
-            skipped ? `, skipped ${skipped} duplicate${skipped > 1 ? "s" : ""}` : ""
-          }`
-        );
+        toast.success("Subject(s) created");
       }
 
       setIsModalOpen(false);
-      await loadYearData(selectedYear);
-    } catch (e) {
-      console.error(e);
-      const msg =
-        e?.response?.data?.detail ||
-        (Array.isArray(e?.response?.data?.name)
-          ? e.response.data.name.join(", ")
-          : e?.response?.data?.name) ||
-        e?.message ||
-        "Save failed";
-      toast.error(typeof msg === "string" ? msg : "Save failed");
+      loadYearData(selectedYearId);
+    } catch {
+      toast.error("Save failed");
     } finally {
       setSaving(false);
+      setUpdating(false);
     }
   };
 
@@ -251,12 +182,10 @@ export default function AddSubject() {
     setDeletingId(id);
     try {
       await axiosInstance.delete(`subjects/${id}/`);
-      toast.success("Subject deleted");
-      await loadYearData(selectedYear);
-    } catch (e) {
-      console.error(e);
-      const msg = e?.response?.data?.detail || "Delete failed";
-      toast.error(msg);
+      toast.success("Deleted");
+      loadYearData(selectedYearId);
+    } catch {
+      toast.error("Delete failed");
     } finally {
       setDeletingId(null);
     }
@@ -264,238 +193,172 @@ export default function AddSubject() {
 
   return (
     <div className="p-4">
-      <Toaster position="top-center" />
+      <Toaster />
 
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex justify-between mb-4">
         <h2 className="text-xl font-semibold">Subject Management</h2>
         <button
           onClick={openCreate}
-          className="px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700"
+          className="px-4 py-2 rounded-lg bg-blue-600 text-white"
         >
           Add Subject
         </button>
       </div>
 
-      {/* View Year (like AddClass) */}
+      {/* YEAR FILTER */}
       <div className="mb-4 flex items-center gap-3">
-        <label className="text-sm text-slate-600">View Year:</label>
+        <label className="text-sm">View Year:</label>
         <select
-          value={selectedYear}
-          onChange={(e) => setSelectedYear(Number(e.target.value))}
-          className="rounded-md border border-slate-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          value={selectedYearId}
+          onChange={(e) => setSelectedYearId(e.target.value)}
+          className="border rounded px-3 py-2"
         >
           {years.map((y) => (
-            <option key={y} value={y}>
-              {y}
+            <option key={y.id} value={y.id}>
+              {y.year} {y.is_active && "(Active)"}
             </option>
           ))}
         </select>
       </div>
 
-      {/* Filters */}
-      <div className="grid gap-3 md:grid-cols-2 max-w-2xl mb-4">
-        <div>
-          <label className="block text-sm mb-1 text-slate-700">Search by name</label>
-          <input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Type subject name…"
-            className="w-full rounded-md border border-slate-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-        </div>
-        <div>
-          <label className="block text-sm mb-1 text-slate-700">Filter by class</label>
-          <Select
-            isClearable
-            options={classOptions}
-            value={classFilter}
-            onChange={setClassFilter}
-            placeholder="All classes"
-            classNamePrefix="select"
-          />
-        </div>
+      {/* SEARCH + FILTER */}
+      <div className="grid md:grid-cols-2 gap-4 max-w-2xl mb-4">
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Search subject..."
+          className="border rounded px-3 py-2"
+        />
+        <Select
+          isClearable
+          options={classOptions}
+          value={classFilter}
+          onChange={setClassFilter}
+          placeholder="All classes"
+        />
       </div>
 
-      {/* Table */}
-      <div className="bg-white rounded-lg border overflow-x-auto">
-        <table className="min-w-full">
+      {/* TABLE */}
+      <div className="border rounded bg-white">
+        <table className="w-full">
           <thead className="bg-slate-100">
             <tr>
-              <th className="px-3 py-2 text-left text-sm text-slate-600 w-16">#</th>
-              <th className="px-3 py-2 text-left text-sm text-slate-600">Subject</th>
-              <th className="px-3 py-2 text-left text-sm text-slate-600">Class</th>
-              <th className="px-3 py-2 text-left text-sm text-slate-600">Type</th>
-              <th className="px-3 py-2 text-right text-sm text-slate-600 w-44">Actions</th>
+              <th className="p-2">#</th>
+              <th className="p-2 text-left">Subject</th>
+              <th className="p-2 text-left">Class</th>
+              <th className="p-2">Type</th>
+              <th className="p-2 text-right">Actions</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
-              <tr>
-                <td className="px-3 py-6 text-center text-slate-500" colSpan={5}>
-                  Loading…
-                </td>
-              </tr>
+              <tr><td colSpan="5" className="p-4 text-center">Loading…</td></tr>
             ) : filtered.length === 0 ? (
-              <tr>
-                <td className="px-3 py-6 text-center text-slate-500" colSpan={5}>
-                  No subjects found
-                </td>
-              </tr>
+              <tr><td colSpan="5" className="p-4 text-center">No subjects</td></tr>
             ) : (
-              filtered.map((s, i) => {
-                const clsName = classNameById.get(String(s.class_name)) || "-";
-                const typeLabels = [
-                  s.is_theory ? "Theoretical" : null,
-                  s.is_practical ? "Practical" : null,
-                ].filter(Boolean);
-                const isDeleting = deletingId === s.id;
-                return (
-                  <tr key={s.id} className="border-t hover:bg-slate-50/50">
-                    <td className="px-3 py-2">{i + 1}</td>
-                    <td className="px-3 py-2 font-medium">{s.name || "-"}</td>
-                    <td className="px-3 py-2">{clsName}</td>
-                    <td className="px-3 py-2">{typeLabels.length ? typeLabels.join(", ") : "—"}</td>
-                    <td className="px-3 py-2 text-right">
-                      <div className="inline-flex gap-2">
-                        <button
-                          onClick={() => openEdit(s)}
-                          className="px-3 py-1 rounded bg-indigo-600 text-white hover:bg-indigo-700"
-                        >
-                          Edit
-                        </button>
-                        <button
-                          onClick={() => destroy(s.id)}
-                          disabled={isDeleting}
-                          className="px-3 py-1 rounded bg-rose-600 text-white hover:bg-rose-700 disabled:opacity-60"
-                        >
-                          {isDeleting ? "Deleting…" : "Delete"}
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })
+              filtered.map((s, i) => (
+                <tr key={s.id} className="border-t">
+                  <td className="p-2">{i + 1}</td>
+                  <td className="p-2">{s.name}</td>
+                  <td className="p-2">
+                    {classNameById.get(String(s.class_name))}
+                  </td>
+                  <td className="p-2">
+                    {[s.is_theory && "Theory", s.is_practical && "Practical"]
+                      .filter(Boolean)
+                      .join(", ") || "—"}
+                  </td>
+                  <td className="p-2 text-right space-x-2">
+                    <button
+                      onClick={() => openEdit(s)}
+                      className="px-3 py-1 bg-indigo-600 text-white rounded"
+                    >
+                      Edit
+                    </button>
+                    <button
+                      onClick={() => destroy(s.id)}
+                      disabled={deletingId === s.id}
+                      className="px-3 py-1 bg-rose-600 text-white rounded"
+                    >
+                      Delete
+                    </button>
+                  </td>
+                </tr>
+              ))
             )}
           </tbody>
         </table>
       </div>
 
-      {/* Modal */}
+      {/* MODAL */}
       {isModalOpen && (
         <div className="fixed inset-0 bg-black/40 grid place-items-center z-50">
-          <div className="bg-white rounded-xl w-[94%] max-w-md shadow-xl border">
-            <div className="px-5 py-4 border-b flex items-center justify-between">
-              <h3 className="text-lg font-semibold">
-                {isEditing ? "Edit Subject" : "Add Subject"}
-              </h3>
-              <button
-                onClick={() => setIsModalOpen(false)}
-                className="text-slate-500 hover:text-slate-800"
-              >
-                ✕
-              </button>
-            </div>
+          <div className="bg-white rounded-xl p-6 w-full max-w-md">
+            <h3 className="text-lg font-semibold mb-4">
+              {isEditing ? "Edit Subject" : "Add Subject"}
+            </h3>
 
-            <form onSubmit={save} className="px-5 py-5 grid gap-4">
-              <div>
-                <label className="block text-sm mb-1 text-slate-700">Subject name *</label>
-                <input
-                  value={form.name}
-                  onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-                  placeholder="e.g., Mathematics, Physics"
-                  className="w-full rounded-md border border-slate-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  required
+            <form onSubmit={save} className="grid gap-4">
+              <input
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                placeholder="Subject name"
+                className="border rounded px-3 py-2"
+              />
+
+              {isEditing ? (
+                <Select
+                  options={classOptions}
+                  value={classOptions.find(
+                    (o) => String(o.value) === String(form.class_name)
+                  )}
+                  onChange={(o) => setForm({ ...form, class_name: o.value })}
                 />
-              </div>
+              ) : (
+                <Select
+                  isMulti
+                  options={classOptions}
+                  value={form.class_ids}
+                  onChange={(opts) => setForm({ ...form, class_ids: opts || [] })}
+                />
+              )}
 
-              {/* Class picker (year-scoped) */}
-              <div>
-                <label className="block text-sm mb-1 text-slate-700">
-                  {isEditing ? "Class *" : "Classes *"}
-                </label>
-
-                {isEditing ? (
-                  <Select
-                    options={classOptions}
-                    value={
-                      classOptions.find((o) => String(o.value) === String(form.class_name)) || null
+              <div className="flex gap-4">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={form.is_theory}
+                    onChange={(e) =>
+                      setForm({ ...form, is_theory: e.target.checked })
                     }
-                    onChange={(opt) => setForm((f) => ({ ...f, class_name: opt?.value || "" }))}
-                    placeholder="Select class…"
-                    classNamePrefix="select"
-                    isDisabled={updating}
-                  />
-                ) : (
-                  <>
-                    <Select
-                      isMulti
-                      options={classOptions}
-                      value={form.class_ids}
-                      onChange={(opts) => setForm((f) => ({ ...f, class_ids: opts || [] }))}
-                      placeholder="Select one or more classes…"
-                      classNamePrefix="select"
-                      isDisabled={saving}
-                    />
-                    {!!form.class_ids.length && (
-                      <div className="mt-2 flex flex-wrap">
-                        {form.class_ids.map((o) => (
-                          <Chip key={o.value}>{o.label}</Chip>
-                        ))}
-                      </div>
-                    )}
-                  </>
-                )}
+                  />{" "}
+                  Theory
+                </label>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={form.is_practical}
+                    onChange={(e) =>
+                      setForm({ ...form, is_practical: e.target.checked })
+                    }
+                  />{" "}
+                  Practical
+                </label>
               </div>
 
-              <div>
-                <label className="block text-sm mb-2 text-slate-700">Subject type</label>
-                <div className="flex items-center gap-5">
-                  <label className="inline-flex items-center gap-2 text-slate-700">
-                    <input
-                      type="checkbox"
-                      checked={form.is_theory}
-                      onChange={(e) =>
-                        setForm((f) => ({
-                          ...f,
-                          is_theory: e.target.checked,
-                        }))
-                      }
-                      disabled={saving || updating}
-                    />
-                    <span>Theoretical</span>
-                  </label>
-                  <label className="inline-flex items-center gap-2 text-slate-700">
-                    <input
-                      type="checkbox"
-                      checked={form.is_practical}
-                      onChange={(e) =>
-                        setForm((f) => ({
-                          ...f,
-                          is_practical: e.target.checked,
-                        }))
-                      }
-                      disabled={saving || updating}
-                    />
-                    <span>Practical</span>
-                  </label>
-                </div>
-              </div>
-
-              <div className="flex justify-end gap-2 pt-2">
+              <div className="flex justify-end gap-2">
                 <button
                   type="button"
                   onClick={() => setIsModalOpen(false)}
-                  className="px-4 py-2 rounded border"
-                  disabled={saving || updating}
+                  className="border rounded px-4 py-2"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-60"
-                  disabled={saving || updating}
+                  className="bg-blue-600 text-white rounded px-4 py-2"
                 >
-                  {isEditing ? (updating ? "Updating…" : "Update") : saving ? "Saving…" : "Save"}
+                  {isEditing ? "Update" : "Save"}
                 </button>
               </div>
             </form>
