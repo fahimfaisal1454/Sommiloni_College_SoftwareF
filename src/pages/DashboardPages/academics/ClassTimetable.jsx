@@ -34,12 +34,12 @@ export default function ClassTimetable() {
   const [teachers, setTeachers] = useState([]);
 
   // NEW: separate class lists for the form and filter, each scoped to a year
-  const [years, setYears] = useState([]);
-  const [formYear, setFormYear] = useState("");
+const [years, setYears] = useState([]);        // [{id, year, is_active}]
+const [formYear, setFormYear] = useState(""); // academic_year_id
   const [filterYear, setFilterYear] = useState("");
   const [classesForm, setClassesForm] = useState([]);
   const [classesFilter, setClassesFilter] = useState([]);
-
+  
   // subjects depend on chosen class
   const [subjects, setSubjects] = useState([]);
 
@@ -142,32 +142,28 @@ export default function ClassTimetable() {
   }, []);
 
   // --- load years like AddSubject -------------------------------------------
-  useEffect(() => {
-    (async () => {
-      try {
-        const yrRes = await AxiosInstance.get("classes/years/");
-        const ys = (Array.isArray(yrRes.data) ? yrRes.data : [])
-          .map((n) => Number(n))
-          .filter((n) => !isNaN(n))
-          .sort((a, b) => b - a);
-        setYears(ys);
-        // defaults: latest year for the form; no constraint for filter
-        if (ys.length) setFormYear(String(ys[0]));
-      } catch {
-        // Fallback: try to infer from all classes
-        const all = await fetchClassesByYear(null);
-        const ys = Array.from(
-          new Set(
-            all
-              .map((c) => Number(c.year))
-              .filter((n) => !isNaN(n))
-          )
-        ).sort((a, b) => b - a);
-        setYears(ys);
-        if (ys.length) setFormYear(String(ys[0]));
+useEffect(() => {
+  (async () => {
+    try {
+      const res = await AxiosInstance.get("academic-years/");
+      const list = Array.isArray(res.data) ? res.data : [];
+
+      // sort latest year first (2026, 2025, ...)
+      list.sort((a, b) => b.year - a.year);
+
+      setYears(list);
+
+      // default to latest academic year
+      if (list.length) {
+        setFormYear(String(list[0].id)); // store ID, not year number
       }
-    })();
-  }, []);
+    } catch (err) {
+      console.error("Failed to load academic years", err);
+      setYears([]);
+      setFormYear("");
+    }
+  })();
+}, []);
 
   // when formYear changes, load classes for the form
   useEffect(() => {
@@ -221,16 +217,12 @@ export default function ClassTimetable() {
   }, [form.class_id, filters.class_id]);
 
   // sections filtered by chosen class if your API annotates them with class
-  const sectionsForForm = useMemo(() => {
-    if (!form.class_id) return sections;
-    const byClass = sections.filter(
-      (s) =>
-        Number(s.class_name) === Number(form.class_id) ||
-        Number(s.class_name_id) === Number(form.class_id) ||
-        Number(s.class_id) === Number(form.class_id)
-    );
-    return byClass.length ? byClass : sections;
-  }, [sections, form.class_id]);
+const sectionsForForm = useMemo(() => {
+  if (!form.class_id) return [];
+  return sections.filter(
+    (s) => String(s.class_id) === String(form.class_id)
+  );
+}, [sections, form.class_id]);
 
   const sectionsForFilter = useMemo(() => {
     if (!filters.class_id) return sections;
@@ -418,17 +410,18 @@ export default function ClassTimetable() {
           <div className="flex flex-col">
             <label className="text-xs text-gray-600">Year</label>
             <select
-              className="select select-bordered"
-              value={formYear || ""}
-              onChange={(e) => setFormYear(e.target.value)}
-            >
-              <option value="">All years</option>
-              {years.map((y) => (
-                <option key={y} value={y}>
-                  {y}
-                </option>
-              ))}
-            </select>
+  className="select select-bordered"
+  value={formYear || ""}
+  onChange={(e) => setFormYear(e.target.value)}
+>
+  <option value="">Select academic year</option>
+  {years.map((y) => (
+    <option key={y.id} value={y.id}>
+      {y.year}
+    </option>
+  ))}
+</select>
+
           </div>
 
           <SelectBox
@@ -559,17 +552,18 @@ export default function ClassTimetable() {
           <div className="flex flex-col">
             <label className="text-xs text-gray-600">Filter: Year</label>
             <select
-              className="select select-bordered"
-              value={filterYear || ""}
-              onChange={(e) => setFilterYear(e.target.value)}
-            >
-              <option value="">All years</option>
-              {years.map((y) => (
-                <option key={y} value={y}>
-                  {y}
-                </option>
-              ))}
-            </select>
+  className="select select-bordered"
+  value={filterYear || ""}
+  onChange={(e) => setFilterYear(e.target.value)}
+>
+  <option value="">All years</option>
+  {years.map((y) => (
+    <option key={y.id} value={y.id}>
+      {y.year}
+    </option>
+  ))}
+</select>
+
           </div>
 
           <SelectBox
