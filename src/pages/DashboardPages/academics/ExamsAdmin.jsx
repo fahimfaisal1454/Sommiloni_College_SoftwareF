@@ -32,27 +32,29 @@ export default function ExamsAdmin() {
 
   /* --------------------- Fetch years --------------------- */
   useEffect(() => {
-    (async () => {
-      try {
-        const res = await AxiosInstance.get("classes/years/");
-        const serverYears = Array.isArray(res.data)
-          ? res.data.map((y) => ({ value: y, label: String(y) }))
-          : [];
-        setYears(serverYears);
+  (async () => {
+    try {
+      const res = await AxiosInstance.get("academic-years/");
+      const list = Array.isArray(res.data) ? res.data : [];
 
-        // preselect latest year
-        if (serverYears.length) {
-          const latest = serverYears
-            .slice()
-            .sort((a, b) => Number(b.value) - Number(a.value))[0];
-          setForm((p) => ({ ...p, year: latest }));
-        }
-      } catch {
-        toast.error("Failed to load years");
+      const opts = list
+        .sort((a, b) => b.year - a.year)
+        .map((y) => ({
+          value: y.id,      // 🔑 academic year ID
+          label: String(y.year),
+        }));
+
+      setYears(opts);
+
+      if (opts.length) {
+        setForm((p) => ({ ...p, year: opts[0] }));
       }
-    })();
-  }, []);
-
+    } catch {
+      toast.error("Failed to load academic years");
+      setYears([]);
+    }
+  })();
+}, []);
   /* --------------------- Fetch classes for year --------------------- */
   useEffect(() => {
     if (!form.year?.value) {
@@ -63,8 +65,8 @@ export default function ExamsAdmin() {
     (async () => {
       try {
         const { data } = await AxiosInstance.get("classes/", {
-          params: { year: form.year.value },
-        });
+  params: { academic_year: form.year.value },
+});
         const list = Array.isArray(data) ? data : data?.results || [];
         setClasses(list);
       } catch {
@@ -353,71 +355,81 @@ export default function ExamsAdmin() {
 
   /* --------------------- Open / close config modal --------------------- */
 
-  const openConfig = async (ex) => {
-    setConfigExam(ex);
-    setConfigRows([]);
-    setConfigLoading(true);
+const openConfig = async (ex) => {
+  setConfigExam(ex);
+  setConfigRows([]);
+  setConfigLoading(true);
 
-    try {
-      const classId = Number(ex.class_name?.id ?? ex.class_name);
-      if (!classId) {
-        throw new Error("Exam has no class_name id");
-      }
+  try {
+    // ✅ Resolve class ID safely
+    const classId =
+      typeof ex.class_name === "object"
+        ? ex.class_name?.id
+        : ex.class_name;
 
-      // 1) Load subjects for this class
-      const subRes = await AxiosInstance.get("subjects/", {
-        params: { class_id: classId },
-      });
-      const subjects = Array.isArray(subRes.data)
-        ? subRes.data
-        : subRes.data?.results || [];
-
-      // 2) Load existing configs for this exam
-      let existing = [];
-      try {
-        const cfgRes = await AxiosInstance.get("exam-subject-configs/", {
-          params: { exam: ex.id },
-        });
-        existing = Array.isArray(cfgRes.data)
-          ? cfgRes.data
-          : cfgRes.data?.results || [];
-      } catch (err) {
-        console.warn("Failed to load exam-subject-configs:", err);
-        existing = [];
-      }
-
-      const bySubject = new Map();
-      existing.forEach((c) => {
-        const sid = Number(c.subject?.id ?? c.subject);
-        if (sid) bySubject.set(sid, c);
-      });
-
-      const rows = subjects.map((s) => {
-        const sid = Number(s.id);
-        const existingCfg = bySubject.get(sid);
-        const base = computeDefaultConfig(ex, s, existingCfg);
-        return {
-          subjectId: sid,
-          subjectName: s.name,
-          isPractical: !!s.is_practical,
-          isTheory: !!s.is_theory,
-          configId: existingCfg?.id ?? null,
-          ...base,
-        };
-      });
-
-      rows.sort((a, b) => a.subjectName.localeCompare(b.subjectName));
-      setConfigRows(rows);
-    } catch (e) {
-      console.error(e);
-      toast.error("Failed to load subjects / marks setup.");
-      setConfigExam(null);
-      setConfigRows([]);
-    } finally {
-      setConfigLoading(false);
+    if (!classId) {
+      throw new Error("Exam class not resolved");
     }
-  };
 
+    // ✅ Resolve academic year (backend returns PK)
+    const examYearId = ex.year || form.year?.value;
+    if (!examYearId) {
+      throw new Error("Academic year not resolved");
+    }
+
+    // 1️⃣ Load subjects
+    const subRes = await AxiosInstance.get("subjects/", {
+      params: {
+        class_id: classId,
+        academic_year: examYearId,
+      },
+    });
+
+    const subjects = Array.isArray(subRes.data)
+      ? subRes.data
+      : subRes.data?.results || [];
+
+    // 2️⃣ Load existing configs
+    let existing = [];
+    try {
+      const cfgRes = await AxiosInstance.get("exam-subject-configs/", {
+        params: { exam: ex.id },
+      });
+      existing = Array.isArray(cfgRes.data)
+        ? cfgRes.data
+        : cfgRes.data?.results || [];
+    } catch {}
+
+    const bySubject = new Map();
+    existing.forEach((c) => {
+      const sid = Number(c.subject?.id ?? c.subject);
+      if (sid) bySubject.set(sid, c);
+    });
+
+    const rows = subjects.map((s) => {
+      const sid = Number(s.id);
+      const base = computeDefaultConfig(ex, s, bySubject.get(sid));
+      return {
+        subjectId: sid,
+        subjectName: s.name,
+        isPractical: !!s.is_practical,
+        isTheory: !!s.is_theory,
+        configId: bySubject.get(sid)?.id ?? null,
+        ...base,
+      };
+    });
+
+    rows.sort((a, b) => a.subjectName.localeCompare(b.subjectName));
+    setConfigRows(rows);
+  } catch (err) {
+    console.error(err);
+    toast.error("Failed to load subjects / marks setup");
+    setConfigExam(null);
+    setConfigRows([]);
+  } finally {
+    setConfigLoading(false);
+  }
+};
   const closeConfig = () => {
     setConfigExam(null);
     setConfigRows([]);
