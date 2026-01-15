@@ -9,7 +9,7 @@ export default function AdminMarksViewer() {
   const [classes, setClasses] = useState([]); // array of class objects for selected year
   const [sections, setSections] = useState([]); // array of section objects for selected class
 
-  const [year, setYear] = useState("");       // string/number
+  const [year, setYear] = useState(null);      // AcademicYear object
   const [classId, setClassId] = useState(""); // selected class id
   const [sectionId, setSectionId] = useState(""); // selected section id
 
@@ -94,22 +94,19 @@ export default function AdminMarksViewer() {
   };
 
   /* --------------------- Fetch years (like ExamsAdmin) --------------------- */
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await AxiosInstance.get("classes/years/");
-        const serverYears = Array.isArray(res.data) ? res.data : [];
-        setYears(serverYears);
-        if (serverYears.length) {
-          const latest = serverYears.slice().sort((a, b) => Number(b) - Number(a))[0];
-          setYear(String(latest));
-        }
-      } catch {
-        toast.error("Failed to load years");
-        setYears([]);
-      }
-    })();
-  }, []);
+useEffect(() => {
+  (async () => {
+    try {
+      const res = await AxiosInstance.get("academic-years/");
+      setYears(res.data);
+      if (res.data.length) setYear(res.data[0]);
+    } catch {
+      toast.error("Failed to load academic years");
+      setYears([]);
+      setYear(null);
+    }
+  })();
+}, []);
 
   /* --------------------- Fetch active grade scale once --------------------- */
   useEffect(() => {
@@ -153,7 +150,9 @@ export default function AdminMarksViewer() {
     }
     (async () => {
       try {
-        const { data } = await AxiosInstance.get("classes/", { params: { year } });
+        const { data } = await AxiosInstance.get("classes/", {
+  params: { academic_year: year.id },
+});
         const list = Array.isArray(data) ? data : data?.results || [];
         setClasses(list);
       } catch {
@@ -196,7 +195,11 @@ export default function AdminMarksViewer() {
       }
       try {
         const { data } = await AxiosInstance.get("exams/", {
-          params: { year, class_name: Number(classId), section: Number(sectionId) },
+         params: {
+  academic_year: year.id,
+  class_id: Number(classId),
+  section_id: Number(sectionId),
+}
         });
         const list = Array.isArray(data) ? data : data?.results || [];
         setExams(list);
@@ -246,7 +249,11 @@ export default function AdminMarksViewer() {
 
       const buildFromTimetable = async () => {
         const { data } = await AxiosInstance.get("timetable/", {
-          params: { year, class_name: Number(classId), section: Number(sectionId) },
+          params: {
+  academic_year: year.id,
+  class_id: Number(classId),
+  section_id: Number(sectionId),
+}
         });
         const rows = Array.isArray(data) ? data : [];
         const map = {};
@@ -266,7 +273,10 @@ export default function AdminMarksViewer() {
 
       const buildFromSubjectsOnly = async () => {
         const { data } = await AxiosInstance.get("subjects/", {
-          params: { year, class_id: Number(classId) },
+          params: {
+  academic_year: year.id,
+  class_id: Number(classId),
+}
         });
         const arr = Array.isArray(data) ? data : [];
         const map = {};
@@ -299,8 +309,12 @@ export default function AdminMarksViewer() {
       if (!year || !classId || !sectionId) return;
       try {
         const { data } = await AxiosInstance.get("students/", {
-          params: { year, class_id: Number(classId), section_id: Number(sectionId) },
-        });
+  params: {
+    academic_year: year.id,
+    class_id: Number(classId),
+    section_id: Number(sectionId),
+  },
+});
         const list = Array.isArray(data) ? data : (data?.results || []);
         const map = {};
         for (const s of list) {
@@ -588,15 +602,19 @@ export default function AdminMarksViewer() {
         <div>
           <label className="text-sm font-semibold">Year</label>
           <select
-            value={year}
-            onChange={(e) => setYear(e.target.value)}
-            className="w-full border rounded px-2 py-1 bg-white"
-          >
-            {!years.length && <option value="">Loading…</option>}
-            {years.map((y) => (
-              <option key={y} value={y}>{y}</option>
-            ))}
-          </select>
+  value={year?.id || ""}
+  onChange={(e) =>
+    setYear(years.find(y => String(y.id) === e.target.value))
+  }
+  className="w-full border rounded px-2 py-1 bg-white"
+>
+  <option value="">Select year</option>
+  {years.map((y) => (
+    <option key={y.id} value={y.id}>
+      {y.year}
+    </option>
+  ))}
+</select>
         </div>
 
         <div>
