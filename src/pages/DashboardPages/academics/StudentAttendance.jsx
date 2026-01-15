@@ -16,12 +16,12 @@ export default function StudentAttendance() {
   };
 
   // ---------- state ----------
-  const [years, setYears] = useState([]);     // [2026, 2025, ...]
+const [years, setYears] = useState([]);    // [2026, 2025, ...]
   const [classes, setClasses] = useState([]); // ONLY classes for selected year
   const [sections, setSections] = useState([]);
   const [subjects, setSubjects] = useState([]);
 
-  const [selectedYear, setSelectedYear] = useState("");
+const [selectedYear, setSelectedYear] = useState(""); 
   const [selectedClassId, setSelectedClassId] = useState("");
   const [selectedSectionId, setSelectedSectionId] = useState("");
   const [selectedSubjectId, setSelectedSubjectId] = useState("");
@@ -43,59 +43,50 @@ export default function StudentAttendance() {
 
   // ---------- effects ----------
   // Load all years once (derived from /classes/)
-  useEffect(() => {
-    (async () => {
-      try {
-        const { data } = await AxiosInstance.get("classes/");
-        const list = normalizeArray(data);
-        const setY = new Set();
-        for (const c of list) {
-          if (c?.year !== undefined && c?.year !== null && c?.year !== "") {
-            setY.add(Number(c.year));
-          }
-        }
-        setYears(Array.from(setY).sort((a, b) => b - a));
-      } catch (e) {
-        console.error("Failed to load years from classes/", e);
-        setYears([]);
-      }
-    })();
-  }, []);
+  // ✅ Load academic years (CORRECT SOURCE)
+useEffect(() => {
+  (async () => {
+    try {
+      const res = await AxiosInstance.get("academic-years/");
+      const list = Array.isArray(res.data) ? res.data : [];
+
+      // sort latest year first
+      list.sort((a, b) => b.year - a.year);
+
+      setYears(list);
+    } catch (e) {
+      console.error("Failed to load academic years", e);
+      setYears([]);
+    }
+  })();
+}, []);
 
   // When year changes, fetch classes ONLY for that year (with extra client filter)
-  useEffect(() => {
-    (async () => {
-      // reset downstream
-      setSelectedClassId("");
-      setSections([]);
-      setSelectedSectionId("");
-      setSubjects([]);
-      setSelectedSubjectId("");
+useEffect(() => {
+  (async () => {
+    setSelectedClassId("");
+    setSections([]);
+    setSelectedSectionId("");
+    setSubjects([]);
+    setSelectedSubjectId("");
 
-      if (!selectedYear) {
-        setClasses([]); // require a year first
-        return;
-      }
+    if (!selectedYear) {
+      setClasses([]);
+      return;
+    }
 
-      try {
-        // Try plural first
-        let resp = await AxiosInstance.get("classes/", { params: { years: selectedYear } });
-        let list = uniqueById(normalizeArray(resp.data));
+    try {
+      const res = await AxiosInstance.get("classes/", {
+        params: { academic_year: selectedYear },
+      });
 
-        // Fallback to singular if needed
-        if (!list.length) {
-          resp = await AxiosInstance.get("classes/", { params: { year: selectedYear } });
-          list = uniqueById(normalizeArray(resp.data));
-        }
-
-        // Final guard: filter strictly to the selected year
-        setClasses(list.filter((c) => Number(c.year) === Number(selectedYear)));
-      } catch (e) {
-        console.error("Failed to load classes for year", selectedYear, e);
-        setClasses([]);
-      }
-    })();
-  }, [selectedYear]);
+      setClasses(normalizeArray(res.data));
+    } catch (e) {
+      console.error("Failed to load classes", e);
+      setClasses([]);
+    }
+  })();
+}, [selectedYear]);
 
   // When class changes, populate sections
   useEffect(() => {
@@ -111,31 +102,43 @@ export default function StudentAttendance() {
   }, [selectedClassId, classes]);
 
   // When class+section selected, fetch subjects from timetable
-  useEffect(() => {
-    (async () => {
-      if (!selectedClassId || !selectedSectionId) {
-        setSubjects([]);
-        setSelectedSubjectId("");
-        return;
-      }
-      try {
-        const res = await AxiosInstance.get("timetable/", {
-          params: { class_id: selectedClassId, section_id: selectedSectionId },
-        });
-        const items = normalizeArray(res.data);
-        const uniq = new Map();
-        for (const r of items) {
-          const id = r.subject || r.subject_id;
-          const name = r.subject_label || r.subject_name || "";
-          if (id && !uniq.has(id)) uniq.set(id, { id, name });
+ // ✅ Subject loader (YEAR + CLASS + SECTION aware)
+useEffect(() => {
+  (async () => {
+    if (!selectedYear || !selectedClassId || !selectedSectionId) {
+      setSubjects([]);
+      setSelectedSubjectId("");
+      return;
+    }
+
+    try {
+      const res = await AxiosInstance.get("timetable/", {
+        params: {
+          academic_year: selectedYear,   // 🔑 IMPORTANT
+          class_id: selectedClassId,
+          section_id: selectedSectionId,
+        },
+      });
+
+      const items = normalizeArray(res.data);
+      const uniq = new Map();
+
+      for (const r of items) {
+        const id = r.subject || r.subject_id;
+        const name = r.subject_label || r.subject_name;
+        if (id && !uniq.has(id)) {
+          uniq.set(id, { id, name });
         }
-        setSubjects(Array.from(uniq.values()));
-      } catch (e) {
-        console.warn("Subjects lookup failed; subject optional.", e);
-        setSubjects([]);
       }
-    })();
-  }, [selectedClassId, selectedSectionId]);
+
+      setSubjects(Array.from(uniq.values()));
+    } catch (e) {
+      console.warn("Subject lookup failed", e);
+      setSubjects([]);
+    }
+  })();
+}, [selectedYear, selectedClassId, selectedSectionId]);
+
 
   // ---------- UI helpers ----------
   // Show year only when NO year is selected; otherwise just the class name
@@ -164,9 +167,11 @@ export default function StudentAttendance() {
             className="select select-bordered w-full"
           >
             <option value="">Select year…</option>
-            {years.map((y) => (
-              <option key={y} value={y}>{y}</option>
-            ))}
+{years.map((y) => (
+  <option key={y.id} value={y.id}>
+    {y.year}
+  </option>
+))}
           </select>
         </div>
 
@@ -239,13 +244,14 @@ export default function StudentAttendance() {
       )}
 
       {sheetOpen && (
-        <AttendanceSheet
-          open={sheetOpen}
-          onClose={() => setSheetOpen(false)}
-          classId={selectedClassId}
-          sectionId={selectedSectionId}
-          subjectId={selectedSubjectId || undefined}
-        />
+<AttendanceSheet
+  open={sheetOpen}
+  onClose={() => setSheetOpen(false)}
+  academicYearId={selectedYear}
+  classId={selectedClassId}
+  sectionId={selectedSectionId}
+  subjectId={selectedSubjectId || undefined}
+/>
       )}
     </div>
   );
