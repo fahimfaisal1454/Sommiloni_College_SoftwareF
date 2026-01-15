@@ -34,12 +34,12 @@ export default function ClassTimetable() {
   const [teachers, setTeachers] = useState([]);
 
   // NEW: separate class lists for the form and filter, each scoped to a year
-const [years, setYears] = useState([]);        // [{id, year, is_active}]
-const [formYear, setFormYear] = useState(""); // academic_year_id
+  const [years, setYears] = useState([]); // [{id, year, is_active}]
+  const [formYear, setFormYear] = useState(""); // academic_year_id
   const [filterYear, setFilterYear] = useState("");
   const [classesForm, setClassesForm] = useState([]);
   const [classesFilter, setClassesFilter] = useState([]);
-  
+  const [selectedClass, setSelectedClass] = useState(null);
   // subjects depend on chosen class
   const [subjects, setSubjects] = useState([]);
 
@@ -126,13 +126,13 @@ const [formYear, setFormYear] = useState(""); // academic_year_id
         const [p, r, s, t] = await Promise.all([
           tryGet(["periods/"]),
           tryGet(["rooms/"]),
-          tryGet(["sections/", "section/"]),
-          tryGet(["teachers/", "people/teachers/", "faculty/teachers/", "faculty/"]),
+          // tryGet(["sections/", "section/"]),
+          // tryGet(["teachers/", "people/teachers/", "faculty/teachers/", "faculty/"]),
         ]);
         setPeriods(p);
         setRooms(r);
         setSections(s);
-        setTeachers(t);
+        // setTeachers(t);
       } finally {
         setLoading(false);
       }
@@ -142,28 +142,28 @@ const [formYear, setFormYear] = useState(""); // academic_year_id
   }, []);
 
   // --- load years like AddSubject -------------------------------------------
-useEffect(() => {
-  (async () => {
-    try {
-      const res = await AxiosInstance.get("academic-years/");
-      const list = Array.isArray(res.data) ? res.data : [];
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await AxiosInstance.get("academic-years/");
+        const list = Array.isArray(res.data) ? res.data : [];
 
-      // sort latest year first (2026, 2025, ...)
-      list.sort((a, b) => b.year - a.year);
+        // sort latest year first (2026, 2025, ...)
+        list.sort((a, b) => b.year - a.year);
 
-      setYears(list);
+        setYears(list);
 
-      // default to latest academic year
-      if (list.length) {
-        setFormYear(String(list[0].id)); // store ID, not year number
+        // default to latest academic year
+        if (list.length) {
+          setFormYear(String(list[0].id)); // store ID, not year number
+        }
+      } catch (err) {
+        console.error("Failed to load academic years", err);
+        setYears([]);
+        setFormYear("");
       }
-    } catch (err) {
-      console.error("Failed to load academic years", err);
-      setYears([]);
-      setFormYear("");
-    }
-  })();
-}, []);
+    })();
+  }, []);
 
   // when formYear changes, load classes for the form
   useEffect(() => {
@@ -186,43 +186,121 @@ useEffect(() => {
 
   // load subjects whenever selected class changes (form or filters)
   useEffect(() => {
+    // if no class selected, clear subjects
+    if (!form.class_id) {
+      setSubjects([]);
+      return;
+    }
+
     (async () => {
-      if (!form.class_id && !filters.class_id) {
-        setSubjects([]);
-        return;
-      }
-      const classId = form.class_id || filters.class_id;
       try {
-        const res = await AxiosInstance.get(`subjects/?class_name=${classId}`);
-        setSubjects(Array.isArray(res.data) ? res.data : []);
-      } catch {
+        // primary API (class-wise subjects)
+        const res = await AxiosInstance.get(
+          `subjects/?class_name=${form.class_id}`
+        );
+
+        // support both normal & paginated response
+        const data = Array.isArray(res.data)
+          ? res.data
+          : Array.isArray(res.data?.results)
+          ? res.data.results
+          : [];
+
+        setSubjects(data);
+      } catch (error) {
+        console.error("Subject load failed, trying fallback", error);
+
         try {
+          // fallback: assigned subjects
           const res2 = await AxiosInstance.get(
-            `assigned-subjects/?class_name=${classId}`
+            `assigned-subjects/?class_name=${form.class_id}`
           );
+
           setSubjects(
             Array.isArray(res2.data) ? res2.data.map((x) => x.subject) : []
           );
-        } catch {
+        } catch (error2) {
+          console.error("Assigned subject load failed", error2);
+
           try {
+            // last fallback: all subjects
             const res3 = await AxiosInstance.get("subjects/");
-            setSubjects(Array.isArray(res3.data) ? res3.data : []);
-          } catch {
+
+            setSubjects(
+              Array.isArray(res3.data)
+                ? res3.data
+                : Array.isArray(res3.data?.results)
+                ? res3.data.results
+                : []
+            );
+          } catch (error3) {
+            console.error("All subject load failed", error3);
             setSubjects([]);
           }
         }
       }
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form.class_id, filters.class_id]);
+  }, [form.class_id]);
+
+  //
+  useEffect(() => {
+    // no subject selected → clear teachers
+    if (!form.subject_id) {
+      setTeachers([]);
+      return;
+    }
+
+    (async () => {
+      try {
+        // primary API: teachers for subject
+        const res = await AxiosInstance.get(
+          `teachers/?subject=${form.subject_id}`
+        );
+
+        const data = Array.isArray(res.data)
+          ? res.data
+          : Array.isArray(res.data?.results)
+          ? res.data.results
+          : [];
+
+        setTeachers(data);
+      } catch (error) {
+        console.error("Teacher load failed, fallback", error);
+
+        try {
+          // fallback: assigned teachers
+          const res2 = await AxiosInstance.get(
+            `assigned-teachers/?subject=${form.subject_id}`
+          );
+
+          setTeachers(
+            Array.isArray(res2.data) ? res2.data.map((x) => x.teacher) : []
+          );
+        } catch {
+          // final fallback: all teachers
+          try {
+            const res3 = await AxiosInstance.get("teachers/");
+            setTeachers(
+              Array.isArray(res3.data) ? res3.data : res3.data?.results || []
+            );
+          } catch {
+            setTeachers([]);
+          }
+        }
+      }
+    })();
+  }, [form.subject_id]);
 
   // sections filtered by chosen class if your API annotates them with class
-const sectionsForForm = useMemo(() => {
-  if (!form.class_id) return [];
-  return sections.filter(
-    (s) => String(s.class_id) === String(form.class_id)
-  );
-}, [sections, form.class_id]);
+  // const sectionsForForm = useMemo(() => {
+  //   if (!form.class_id) return [];
+  //   const byClass = sections.filter(
+  //     (s) =>
+  //       Number(s.class_name) === Number(form.class_id) ||
+  //       Number(s.class_name_id) === Number(form.class_id)
+  //   );
+  //   return byClass.length ? byClass : [];
+  // }, [sections, form.class_id]);
 
   const sectionsForFilter = useMemo(() => {
     if (!filters.class_id) return sections;
@@ -370,7 +448,7 @@ const sectionsForForm = useMemo(() => {
     setEditingId(row.id);
     setForm({
       class_id: row.class_name || row.class_name_id || row.class || "",
-      section_id: row.section || row.section_id || "",
+      section_id: row.section_id || row.section || "",
       subject_id: row.subject || row.subject_id || "",
       teacher_id: row.teacher || row.teacher_id || "",
       day: row.day_of_week || row.day || "",
@@ -410,37 +488,47 @@ const sectionsForForm = useMemo(() => {
           <div className="flex flex-col">
             <label className="text-xs text-gray-600">Year</label>
             <select
-  className="select select-bordered"
-  value={formYear || ""}
-  onChange={(e) => setFormYear(e.target.value)}
->
-  <option value="">Select academic year</option>
-  {years.map((y) => (
-    <option key={y.id} value={y.id}>
-      {y.year}
-    </option>
-  ))}
-</select>
-
+              className="select select-bordered"
+              value={formYear || ""}
+              onChange={(e) => setFormYear(e.target.value)}
+            >
+              <option value="">Select academic year</option>
+              {years.map((y) => (
+                <option key={y.id} value={y.id}>
+                  {y.year}
+                </option>
+              ))}
+            </select>
           </div>
 
           <SelectBox
             label="Class"
             value={form.class_id}
             onChange={(v) => {
+              const cls = classesForm.find((c) => String(c.id) === String(v));
+              setSelectedClass(cls || null); // ✅ THIS LINE IS CRITICAL
               setField("class_id", v);
               setField("section_id", "");
             }}
             options={classesForm}
             getLabel={(o) => o.name || o.title}
           />
-          <SelectBox
-            label="Section"
-            value={form.section_id}
-            onChange={(v) => setField("section_id", v)}
-            options={sectionsForForm}
-            getLabel={(o) => o.name}
-          />
+          <div className="flex flex-col">
+            <label className="text-xs text-gray-600">Section</label>
+            <select
+              className="select select-bordered"
+              value={form.section_id}
+              onChange={(e) => setField("section_id", e.target.value)}
+            >
+              <option value="">Select section</option>
+
+              {selectedClass?.sections_detail?.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+          </div>
           <SelectBox
             label="Subject"
             value={form.subject_id}
@@ -529,12 +617,20 @@ const sectionsForForm = useMemo(() => {
 
         <div className="flex gap-2">
           {!editingId ? (
-            <button className="btn btn-success" onClick={saveNew} disabled={saving}>
+            <button
+              className="btn btn-success"
+              onClick={saveNew}
+              disabled={saving}
+            >
               Add Row
             </button>
           ) : (
             <>
-              <button className="btn btn-primary" onClick={saveEdit} disabled={saving}>
+              <button
+                className="btn btn-primary"
+                onClick={saveEdit}
+                disabled={saving}
+              >
                 Update
               </button>
               <button className="btn" onClick={clearForm} type="button">
@@ -552,24 +648,25 @@ const sectionsForForm = useMemo(() => {
           <div className="flex flex-col">
             <label className="text-xs text-gray-600">Filter: Year</label>
             <select
-  className="select select-bordered"
-  value={filterYear || ""}
-  onChange={(e) => setFilterYear(e.target.value)}
->
-  <option value="">All years</option>
-  {years.map((y) => (
-    <option key={y.id} value={y.id}>
-      {y.year}
-    </option>
-  ))}
-</select>
-
+              className="select select-bordered"
+              value={filterYear || ""}
+              onChange={(e) => setFilterYear(e.target.value)}
+            >
+              <option value="">All years</option>
+              {years.map((y) => (
+                <option key={y.id} value={y.id}>
+                  {y.year}
+                </option>
+              ))}
+            </select>
           </div>
 
           <SelectBox
             label="Filter: Class"
             value={filters.class_id}
-            onChange={(v) => setFilters((f) => ({ ...f, class_id: v, section_id: "" }))}
+            onChange={(v) =>
+              setFilters((f) => ({ ...f, class_id: v, section_id: "" }))
+            }
             options={classesFilter}
             getLabel={(o) => o.name || o.title}
           />
@@ -591,7 +688,9 @@ const sectionsForForm = useMemo(() => {
             <label className="text-xs text-gray-600">Filter: Day</label>
             <select
               value={filters.day}
-              onChange={(e) => setFilters((f) => ({ ...f, day: e.target.value }))}
+              onChange={(e) =>
+                setFilters((f) => ({ ...f, day: e.target.value }))
+              }
               className="select select-bordered"
             >
               <option value="">All days</option>
@@ -625,24 +724,48 @@ const sectionsForForm = useMemo(() => {
               <th className="text-right">Actions</th>
             </tr>
           </thead>
-        <tbody>
+          <tbody>
             {loading ? (
-              <tr><td colSpan={8}>Loading…</td></tr>
+              <tr>
+                <td colSpan={8}>Loading…</td>
+              </tr>
             ) : rows.length === 0 ? (
-              <tr><td colSpan={8}>No rows</td></tr>
+              <tr>
+                <td colSpan={8}>No rows</td>
+              </tr>
             ) : (
               rows.map((r) => (
                 <tr key={r.id}>
                   <td>{r.day_of_week_display || r.day_of_week || r.day}</td>
                   <td>{r.period}</td>
-                  <td>{timeHHMM(r.start_time)}–{timeHHMM(r.end_time)}</td>
-                  <td>{r.class_name_label || classLabel(r.class_name)}{" "}{r.section_label || sectionLabel(r.section)}</td>
+                  <td>
+                    {timeHHMM(r.start_time)}–{timeHHMM(r.end_time)}
+                  </td>
+                  <td>
+                    {r.class_name_label || classLabel(r.class_name)}{" "}
+                    {r.section_label || sectionLabel(r.section)}
+                  </td>
                   <td>{r.subject_label || subjectLabel(r.subject)}</td>
                   <td>{r.teacher_label || teacherLabel(r.teacher)}</td>
-                  <td>{r.classroom_label || roomLabel(r.classroom) || r.room || "—"}</td>
+                  <td>
+                    {r.classroom_label ||
+                      roomLabel(r.classroom) ||
+                      r.room ||
+                      "—"}
+                  </td>
                   <td className="text-right">
-                    <button className="btn btn-xs mr-2" onClick={() => onEdit(r)}>Edit</button>
-                    <button className="btn btn-xs btn-error" onClick={() => onDelete(r.id)}>Delete</button>
+                    <button
+                      className="btn btn-xs mr-2"
+                      onClick={() => onEdit(r)}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      className="btn btn-xs btn-error"
+                      onClick={() => onDelete(r.id)}
+                    >
+                      Delete
+                    </button>
                   </td>
                 </tr>
               ))
