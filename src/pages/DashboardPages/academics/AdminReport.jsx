@@ -36,7 +36,7 @@ export default function AdminReport() {
   const [classes, setClasses] = useState([]);
   const [sections, setSections] = useState([]);
 
-  const [year, setYear] = useState("");
+  const [year, setYear] = useState(null);
   const [classId, setClassId] = useState("");
   const [sectionId, setSectionId] = useState("");
 
@@ -89,10 +89,7 @@ export default function AdminReport() {
       if (p >= min && p <= max) {
         return {
           letter: band.letter || "—",
-          gpa:
-            band.gpa === null || band.gpa === undefined
-              ? "—"
-              : band.gpa,
+          gpa: band.gpa === null || band.gpa === undefined ? "—" : band.gpa,
         };
       }
     }
@@ -103,25 +100,29 @@ export default function AdminReport() {
   useEffect(() => {
     (async () => {
       try {
-        const r = await AxiosInstance.get("classes/years/");
+        const r = await AxiosInstance.get("academic-years/");
         const ys = Array.isArray(r.data) ? r.data : [];
         setYears(ys);
+
+        // select first academic year (usually latest if backend orders it)
         if (ys.length) {
-          const latest = ys.slice().sort((a, b) => Number(b) - Number(a))[0];
-          setYear(String(latest));
+          setYear(ys[0]); // ✅ FULL AcademicYear object
         }
       } catch {
-        toast.error("Failed to load years.");
+        toast.error("Failed to load academic years.");
+        setYears([]);
+        setYear(null);
       }
     })();
   }, []);
-
   /* ---------- load active grade scale once ---------- */
   useEffect(() => {
     (async () => {
       try {
         const res = await AxiosInstance.get("grade-scales/");
-        const list = Array.isArray(res.data) ? res.data : res.data?.results || [];
+        const list = Array.isArray(res.data)
+          ? res.data
+          : res.data?.results || [];
         const active = list.find((s) => s.is_active) || list[0];
         if (active && Array.isArray(active.bands)) {
           setGradeBands(active.bands);
@@ -153,7 +154,9 @@ export default function AdminReport() {
     }
     (async () => {
       try {
-        const { data } = await AxiosInstance.get("classes/", { params: { year } });
+        const { data } = await AxiosInstance.get("classes/", {
+          params: { academic_year: year.id },
+        });
         setClasses(Array.isArray(data) ? data : data?.results || []);
       } catch {
         setClasses([]);
@@ -190,7 +193,11 @@ export default function AdminReport() {
       }
       try {
         const { data } = await AxiosInstance.get("exams/", {
-          params: { year, class_name: Number(classId), section: Number(sectionId) },
+          params: {
+            academic_year: year.id,
+            class_id: Number(classId),
+            section_id: Number(sectionId),
+          },
         });
         const list = Array.isArray(data) ? data : [];
         setExams(list);
@@ -243,7 +250,11 @@ export default function AdminReport() {
       // Try from timetable (has teacher names)
       const buildFromTimetable = async () => {
         const { data } = await AxiosInstance.get("timetable/", {
-          params: { year, class_name: Number(classId), section: Number(sectionId) },
+          params: {
+            academic_year: year.id,
+            class_id: Number(classId),
+            section_id: Number(sectionId),
+          },
         });
         const rows = Array.isArray(data) ? data : [];
         const map = {};
@@ -254,7 +265,8 @@ export default function AdminReport() {
             map[sid] = {
               id: sid,
               name: r.subject_label || r.subject || sid,
-              teacher_name: r.teacher_name || r.teacher_label || r.teacher || "—",
+              teacher_name:
+                r.teacher_name || r.teacher_label || r.teacher || "—",
             };
           }
         }
@@ -263,7 +275,11 @@ export default function AdminReport() {
 
       const buildFromSubjectsOnly = async () => {
         const { data } = await AxiosInstance.get("subjects/", {
-          params: { year, class_id: Number(classId) },
+          params: {
+            academic_year: year.id,
+            class_id: Number(classId),
+            section_id: Number(sectionId),
+          },
         });
         const arr = Array.isArray(data) ? data : [];
         const map = {};
@@ -296,7 +312,11 @@ export default function AdminReport() {
       if (!year || !classId || !sectionId) return;
       try {
         const { data } = await AxiosInstance.get("students/", {
-          params: { year, class_id: Number(classId), section_id: Number(sectionId) },
+          params: {
+            academic_year: year.id,
+            class_id: Number(classId),
+            section_id: Number(sectionId),
+          },
         });
         const list = Array.isArray(data) ? data : data?.results || [];
         const map = {};
@@ -374,7 +394,10 @@ export default function AdminReport() {
         const selectedExam = exams.find((e) => String(e.id) === String(examId));
         if (!selectedExam) return;
 
-        const map = await fetchSubjectMarksForExam(selectedExam, selectedStudentId);
+        const map = await fetchSubjectMarksForExam(
+          selectedExam,
+          selectedStudentId
+        );
 
         // union of subjects we know + marks returned
         const union = new Set([...Object.keys(subjectMeta), ...map.keys()]);
@@ -391,9 +414,7 @@ export default function AdminReport() {
             mk && mk.gpa !== null && mk.gpa !== undefined
               ? Number(mk.gpa)
               : null;
-          let letter =
-            mk?.letter ??
-            (gpa !== null ? letterFromGPA(gpa) : "—");
+          let letter = mk?.letter ?? (gpa !== null ? letterFromGPA(gpa) : "—");
 
           // recompute grade from percentage if we know full marks
           const cfg = examConfigs[sid];
@@ -425,17 +446,14 @@ export default function AdminReport() {
         setDetailRows(rows);
 
         // totals – sum real (out of full) scores and average recomputed GPAs
-        const valid = rows.filter(
-          (r) => r.score != null || r.gpa != null
-        );
+        const valid = rows.filter((r) => r.score != null || r.gpa != null);
         if (valid.length) {
           const totalScore = valid.reduce(
             (s, r) => s + Number(r.score || 0),
             0
           );
           const avgGpa =
-            valid.reduce((s, r) => s + Number(r.gpa || 0), 0) /
-            valid.length;
+            valid.reduce((s, r) => s + Number(r.gpa || 0), 0) / valid.length;
           setTotals({ totalScore, avgGpa, count: valid.length });
         } else {
           setTotals(null);
@@ -447,7 +465,17 @@ export default function AdminReport() {
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedStudentId, examId, exams, subjectMeta, year, classId, sectionId, examConfigs, gradeBands]);
+  }, [
+    selectedStudentId,
+    examId,
+    exams,
+    subjectMeta,
+    year,
+    classId,
+    sectionId,
+    examConfigs,
+    gradeBands,
+  ]);
 
   /* ---------- more helpers ---------- */
   const selectedStudent = selectedStudentId
@@ -480,17 +508,16 @@ export default function AdminReport() {
       ]);
     }
 
-    const csv =
-      [headers, ...rows]
-        .map((r) =>
-          r
-            .map((cell) => {
-              const v = String(cell ?? "");
-              return v.includes(",") ? `"${v.replace(/"/g, '""')}"` : v;
-            })
-            .join(",")
-        )
-        .join("\n");
+    const csv = [headers, ...rows]
+      .map((r) =>
+        r
+          .map((cell) => {
+            const v = String(cell ?? "");
+            return v.includes(",") ? `"${v.replace(/"/g, '""')}"` : v;
+          })
+          .join(",")
+      )
+      .join("\n");
 
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
@@ -515,13 +542,15 @@ export default function AdminReport() {
           <div className="text-xs font-semibold mb-1">Year</div>
           <select
             className="w-full border rounded px-2 py-1 bg-white"
-            value={year}
-            onChange={(e) => setYear(e.target.value)}
+            value={year?.id || ""}
+            onChange={(e) =>
+              setYear(years.find((y) => String(y.id) === e.target.value))
+            }
           >
             <option value="">Select year…</option>
             {years.map((y) => (
-              <option key={y} value={y}>
-                {y}
+              <option key={y.id} value={y.id}>
+                {y.year}
               </option>
             ))}
           </select>
@@ -692,10 +721,7 @@ export default function AdminReport() {
                 {totals && (
                   <tfoot>
                     <tr className="bg-slate-50 font-medium">
-                      <td
-                        className="px-2 py-1 border text-right"
-                        colSpan={1}
-                      >
+                      <td className="px-2 py-1 border text-right" colSpan={1}>
                         Total
                       </td>
                       <td className="px-2 py-1 border text-center">
