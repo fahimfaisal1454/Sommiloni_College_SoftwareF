@@ -7,9 +7,10 @@ const byName = (a, b) => (a.name || "").localeCompare(b.name || "");
 // --- API helpers ---
 async function getYears() {
   try {
-    const { data } = await Axios.get("classes/years/");
-    return Array.isArray(data) ? data : [];
-  } catch {
+    const { data } = await Axios.get("academic-years/");
+    return Array.isArray(data) ? data : data?.results || [];
+  } catch (e) {
+    console.error("Failed to load academic years", e);
     return [];
   }
 }
@@ -62,34 +63,45 @@ useEffect(() => {
   (async () => {
     const ys = await getYears();
     setYears(ys);
+
     if (ys.length) {
-      const current = Math.min(...ys);   // 👈 running year
-      setFromYear(String(current));
-      setToYear(String(current + 1));
+      // Prefer active year, else latest
+      const active =
+        ys.find(y => y.is_active) ||
+        ys.slice().sort((a, b) => Number(b.year) - Number(a.year))[0];
+
+      setFromYear(active);                // FULL OBJECT
+      setToYear(String(Number(active.year) + 1)); // NEXT YEAR NUMBER
     }
   })();
 }, []);
 
   // Load classes when year changes
-  useEffect(() => {
-    (async () => {
-      if (!fromYear) return;
-      const cl = await getClasses(fromYear);
-      setFromClasses(cl);
-      setFromClassId(""); setFromSections([]); setFromSectionId("");
-      setLeft([]); setSelLeft(new Set());
-    })();
-  }, [fromYear]);
+useEffect(() => {
+  (async () => {
+    if (!fromYear?.id) return;
+    const cl = await getClasses(fromYear.id);
+    setFromClasses(cl);
+    setFromClassId("");
+    setFromSections([]);
+    setFromSectionId("");
+    setLeft([]);
+    setSelLeft(new Set());
+  })();
+}, [fromYear]);
 
-  useEffect(() => {
-    (async () => {
-      if (!toYear) return;
-      const cl = await getClasses(toYear);
-      setToClasses(cl);
-      setToClassId(""); setToSections([]); setToSectionId("");
-      setRight([]); setSelRight(new Set());
-    })();
-  }, [toYear]);
+useEffect(() => {
+  (async () => {
+    if (!toYear) return;
+    const cl = await getClasses(toYear);
+    setToClasses(cl);
+    setToClassId("");
+    setToSections([]);
+    setToSectionId("");
+    setRight([]);
+    setSelRight(new Set());
+  })();
+}, [toYear]);
 
   // Sections based on chosen class
   useEffect(() => {
@@ -205,27 +217,51 @@ useEffect(() => {
       <h1 className="text-2xl font-bold mb-4">Student Promotion</h1>
 
       {/* Top row: choose years */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-3">
-        <div className="p-3 border rounded-lg">
-          <div className="font-medium mb-2">Academic Year (Current)</div>
-          <select className="select select-bordered w-full"
-                  value={fromYear}
-                  onChange={e => setFromYear(e.target.value)}>
-            {years.map(y => <option key={y} value={y}>{y}</option>)}
-          </select>
-        </div>
-        <div className="p-3 border rounded-lg">
-          <div className="font-medium mb-2">Next Academic Year</div>
-          <select className="select select-bordered w-full"
-                  value={toYear}
-                  onChange={e => setToYear(e.target.value)}>
-            {[...years, Math.max(0, ...(years||[])) + 1]
-              .filter((v,i,self) => self.indexOf(v)===i)
-              .sort((a,b)=>a-b)
-              .map(y => <option key={y} value={y}>{y}</option>)}
-          </select>
-        </div>
-      </div>
+     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-3">
+  {/* CURRENT ACADEMIC YEAR */}
+  <div className="p-3 border rounded-lg">
+    <div className="font-medium mb-2">Academic Year (Current)</div>
+    <select
+      className="select select-bordered w-full"
+      value={fromYear?.id || ""}
+      onChange={e =>
+        setFromYear(
+          years.find(y => String(y.id) === e.target.value)
+        )
+      }
+    >
+      <option value="">Select year</option>
+      {years.map(y => (
+        <option key={y.id} value={y.id}>
+          {y.year}
+        </option>
+      ))}
+    </select>
+  </div>
+
+  {/* NEXT ACADEMIC YEAR */}
+  <div className="p-3 border rounded-lg">
+    <div className="font-medium mb-2">Next Academic Year</div>
+    <select
+      className="select select-bordered w-full"
+      value={toYear}
+      onChange={e => setToYear(e.target.value)}
+    >
+      <option value="">Select year</option>
+      {[
+        ...years.map(y => Number(y.year)),
+        Number(fromYear?.year) + 1
+      ]
+        .filter((v, i, a) => a.indexOf(v) === i)
+        .sort((a, b) => a - b)
+        .map(y => (
+          <option key={y} value={y}>
+            {y}
+          </option>
+        ))}
+    </select>
+  </div>
+</div>
 
       {/* Main panel */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -338,22 +374,27 @@ useEffect(() => {
                 </tr>
               </thead>
               <tbody>
-                {right.map(s => (
-                  <tr key={s.id}>
-                    <td>
-                      <input type="checkbox"
-                             checked={selRight.has(s.id)}
-                             onChange={()=>toggleSelRight(s.id)} />
-                    </td>
-                    <td className="whitespace-nowrap">{s.name}</td>
-                    <td></td>
-                    <td>{toSections.find(x => String(x.id)===String(toSectionId))?.name || "-"}</td>
-                  </tr>
-                ))}
-                {(!right.length) && (
-                  <tr><td colSpan={4} className="p-3 text-slate-500">No students selected</td></tr>
-                )}
-              </tbody>
+  {right.map(s => (
+    <tr key={s.id}>
+      <td>
+        <input
+          type="checkbox"
+          checked={selRight.has(s.id)}
+          onChange={() => toggleSelRight(s.id)}
+        />
+      </td>
+      <td className="whitespace-nowrap">{s.name}</td>
+      <td>
+        {toClasses.find(c => String(c.id) === String(toClassId))?.name || "-"}
+      </td>
+      <td>
+        {toSectionId
+          ? toSections.find(sec => String(sec.id) === String(toSectionId))?.name
+          : "Not selected"}
+      </td>
+    </tr>
+  ))}
+</tbody>
             </table>
           </div>
 
