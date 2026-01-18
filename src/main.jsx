@@ -22,7 +22,7 @@ import AboutCollege from "./pages/AboutCollege.jsx";
 import Routine from "./pages/Academic/Routine.jsx";
 import Acknowledgment from "./pages/Acknowledgment/Acknowledgment.jsx";
 import Result from "./pages/Academic/Result.jsx";
-
+import PublicStudents from "./pages/Students/PublicStudents.jsx";
 import Dashboard from "../src/Layout/Dashboard.jsx";
 import AddNotice from "./pages/DashboardPages/Notice/Notice.jsx";
 import GalleryUpload from "./pages/DashboardPages/Master/GalleryUpload.jsx";
@@ -139,7 +139,10 @@ const router = createBrowserRouter([
         path: "/acknowledgment",
         element: <Acknowledgment />,
       },
-
+      {
+  path: "/students",
+  element: <PublicStudents />,
+}
     ],
   },
 

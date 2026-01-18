@@ -43,6 +43,7 @@ export default function Navbar() {
     { path: "/routine", label: "Routine" },
     { path: "/result", label: "Results" },
     { path: "/facnstaff", label: "Faculty & Staff" },
+    { path: "/students", label: "Students" },
     { path: "/gallery", label: "Gallery" },
     { path: "/notice", label: "Notices" },
     { path: "/contact", label: "Contact" },
