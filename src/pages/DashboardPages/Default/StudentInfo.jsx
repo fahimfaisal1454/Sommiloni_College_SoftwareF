@@ -7,7 +7,8 @@ import * as XLSX from "xlsx";
 import { saveAs } from "file-saver";
 
 /* --------------------- Small helpers --------------------- */
-const required = (v) => v !== null && v !== undefined && String(v).trim() !== "";
+const required = (v) =>
+  v !== null && v !== undefined && String(v).trim() !== "";
 
 // react-select menu portal (to avoid z-index issues with sticky headers/modals)
 const menuPortalTarget = typeof document !== "undefined" ? document.body : null;
@@ -121,16 +122,58 @@ export default function StudentInfo() {
 
   /* Form */
   const [form, setForm] = useState({
-    full_name: "",
+    // Academic (REQUIRED)
     roll_number: "",
     class_name: null,
     section: null,
+
+    // Student names
+    name_bn: "",
+    name_en: "",
+
+    // Father
+    father_name_bn: "",
+    father_name_en: "",
+    father_occupation: "",
+
+    // Mother
+    mother_name_bn: "",
+    mother_name_en: "",
+    mother_occupation: "",
+
+    // Personal
+    religion: "",
     date_of_birth: "",
-    address: "",
+
+    // Permanent address
+    permanent_village: "",
+    permanent_post: "",
+    permanent_thana: "",
+    permanent_district: "",
+
+    // Present address
+    present_village: "",
+    present_post: "",
+    present_thana: "",
+    present_district: "",
+
+    // Guardian
     guardian_name: "",
+    guardian_relation: "",
+    guardian_occupation: "",
     guardian_phone: "",
+
+    // Previous school
+    previous_school: "",
+    previous_class: "",
+    tc_number: "",
+    tc_date: "",
+
+    // Contact
     contact_email: "",
     contact_phone: "",
+
+    // Meta
     photo: null,
     user: null,
   });
@@ -179,7 +222,7 @@ export default function StudentInfo() {
   /* ---------- Derived (classes & years) ---------- */
   const yearOptions = useMemo(
     () => years.map((y) => ({ value: y, label: String(y) })),
-    [years]
+    [years],
   );
 
   const classesById = useMemo(() => {
@@ -201,7 +244,7 @@ export default function StudentInfo() {
     if (!c) return [];
     const raw = c.sections_detail || c.sections || [];
     const normalized = raw.map((s) =>
-      typeof s === "object" ? s : { id: s, name: String(s) }
+      typeof s === "object" ? s : { id: s, name: String(s) },
     );
     return normalized;
   };
@@ -259,9 +302,10 @@ export default function StudentInfo() {
 
         // Load students
         const studentsRes = await axiosInstance.get("students/");
-        const studentsList = (Array.isArray(studentsRes.data)
-          ? studentsRes.data
-          : studentsRes.data?.results || []
+        const studentsList = (
+          Array.isArray(studentsRes.data)
+            ? studentsRes.data
+            : studentsRes.data?.results || []
         ).map((s) => ({ ...s, photo: absUrl(s.photo) }));
         setStudents(studentsList);
 
@@ -294,8 +338,8 @@ export default function StudentInfo() {
       new Set(
         students
           .map((s) => s.user)
-          .filter((id) => id !== null && id !== undefined)
-      )
+          .filter((id) => id !== null && id !== undefined),
+      ),
     ).filter((id) => !(id in usernamesByUserId));
 
     if (!ids.length) return;
@@ -307,8 +351,8 @@ export default function StudentInfo() {
             axiosInstance
               .get(`admin/users/${id}/`)
               .then((res) => [id, res.data?.username || ""])
-              .catch(() => [id, ""])
-          )
+              .catch(() => [id, ""]),
+          ),
         );
         setUsernamesByUserId((prev) => {
           const next = { ...prev };
@@ -326,24 +370,25 @@ export default function StudentInfo() {
     let out = [...students];
     if (searchTerm.trim()) {
       const needle = searchTerm.trim().toLowerCase();
-      out = out.filter((s) =>
-        String(s.full_name || "").toLowerCase().includes(needle)
+      out = out.filter(
+        (s) =>
+          String(s.name_en || "")
+            .toLowerCase()
+            .includes(needle) ||
+          String(s.name_bn || "")
+            .toLowerCase()
+            .includes(needle),
       );
     }
     if (filterYear) {
       out = out.filter(
-        (s) =>
-          Number(classesById[s.class_name]?.year) === Number(filterYear)
+        (s) => Number(classesById[s.class_name]?.year) === Number(filterYear),
       );
     }
     if (filterClassId)
-      out = out.filter(
-        (s) => Number(s.class_name) === Number(filterClassId)
-      );
+      out = out.filter((s) => Number(s.class_name) === Number(filterClassId));
     if (filterSectionId)
-      out = out.filter(
-        (s) => Number(s.section) === Number(filterSectionId)
-      );
+      out = out.filter((s) => Number(s.section) === Number(filterSectionId));
     return out;
   }, [
     students,
@@ -365,9 +410,8 @@ export default function StudentInfo() {
     setTableBusy(true);
     try {
       const res = await axiosInstance.get("students/");
-      const list = (Array.isArray(res.data)
-        ? res.data
-        : res.data?.results || []
+      const list = (
+        Array.isArray(res.data) ? res.data : res.data?.results || []
       ).map((s) => ({
         ...s,
         photo: absUrl(s.photo),
@@ -402,7 +446,7 @@ export default function StudentInfo() {
             } else {
               try {
                 const { data } = await axiosInstance.get(
-                  `admin/users/${s.user}/`
+                  `admin/users/${s.user}/`,
                 );
                 username = data?.username || "";
                 localUserCache[s.user] = username;
@@ -424,14 +468,14 @@ export default function StudentInfo() {
 
           return {
             SL: idx + 1,
-            Name: s.full_name || "",
+            Name: s.name_en || s.name_bn || "",
             Roll: s.roll_number || "",
             Class: classLabel,
             Section: sectionLabel,
             "User ID": username,
             Pass: password,
           };
-        })
+        }),
       );
 
       // update cache with any newly fetched usernames
@@ -481,16 +525,47 @@ export default function StudentInfo() {
   const openCreate = () => {
     setEditingId(null);
     setForm({
-      full_name: "",
       roll_number: "",
       class_name: null,
       section: null,
+
+      name_bn: "",
+      name_en: "",
+
+      father_name_bn: "",
+      father_name_en: "",
+      father_occupation: "",
+
+      mother_name_bn: "",
+      mother_name_en: "",
+      mother_occupation: "",
+
+      religion: "",
       date_of_birth: "",
-      address: "",
+
+      permanent_village: "",
+      permanent_post: "",
+      permanent_thana: "",
+      permanent_district: "",
+
+      present_village: "",
+      present_post: "",
+      present_thana: "",
+      present_district: "",
+
       guardian_name: "",
+      guardian_relation: "",
+      guardian_occupation: "",
       guardian_phone: "",
+
+      previous_school: "",
+      previous_class: "",
+      tc_number: "",
+      tc_date: "",
+
       contact_email: "",
       contact_phone: "",
+
       photo: null,
       user: null,
     });
@@ -520,17 +595,56 @@ export default function StudentInfo() {
     const cls = classesById[s.class_name];
     setEditingId(s.id);
     setForm({
-      full_name: s.full_name || "",
       roll_number: s.roll_number || "",
       class_name: s.class_name != null ? Number(s.class_name) : null,
       section: s.section != null ? Number(s.section) : null,
+      // Student
+      name_bn: s.name_bn || "",
+      name_en: s.name_en || "",
+
+      // Parents
+      father_name_bn: s.father_name_bn || "",
+      father_name_en: s.father_name_en || "",
+      father_occupation: s.father_occupation || "",
+
+      mother_name_bn: s.mother_name_bn || "",
+      mother_name_en: s.mother_name_en || "",
+      mother_occupation: s.mother_occupation || "",
+
+      // Academic / personal
+      religion: s.religion || "",
       date_of_birth: s.date_of_birth || "",
-      address: s.address || "",
+
+      // Permanent address
+      permanent_village: s.permanent_village || "",
+      permanent_post: s.permanent_post || "",
+      permanent_thana: s.permanent_thana || "",
+      permanent_district: s.permanent_district || "",
+
+      // Present address
+      present_village: s.present_village || "",
+      present_post: s.present_post || "",
+      present_thana: s.present_thana || "",
+      present_district: s.present_district || "",
+
+      // Guardian
       guardian_name: s.guardian_name || "",
+      guardian_relation: s.guardian_relation || "",
+      guardian_occupation: s.guardian_occupation || "",
       guardian_phone: s.guardian_phone || "",
+
+      // Previous school
+      previous_school: s.previous_school || "",
+      previous_class: s.previous_class || "",
+      tc_number: s.tc_number || "",
+      tc_date: s.tc_date || "",
+
+      // Contact
       contact_email: s.contact_email || "",
       contact_phone: s.contact_phone || "",
-      photo: null,
+
+      // Meta
+      photo: null, // file is re-selected manually
       user: s.user || null,
     });
     setFormYear(cls?.year != null ? Number(cls.year) : null);
@@ -594,15 +708,15 @@ export default function StudentInfo() {
     if (!isNewUserForForm) return;
     if (userEditedUsername) return;
 
-    if (!form.full_name) {
+    if (!form.name_en) {
       setUserForm((u) => ({ ...u, username: "", password: "" }));
       resetUsernameState();
       return;
     }
 
-    const suggested = slugifyName(form.full_name);
+    const suggested = slugifyName(form.name_en);
     setUserForm((u) => ({ ...u, username: suggested }));
-  }, [form.full_name, createLogin, userEditedUsername, isNewUserForForm]);
+  }, [form.name_en, createLogin, userEditedUsername, isNewUserForForm]);
 
   // For new logins: auto-generate a password (shown in field) unless user typed one
   useEffect(() => {
@@ -690,7 +804,7 @@ export default function StudentInfo() {
         return res.data.some((u) =>
           field === "email"
             ? (u.email || "").toLowerCase() === value.toLowerCase()
-            : (u.phone || "").trim() === value.trim()
+            : (u.phone || "").trim() === value.trim(),
         );
       }
     } catch {
@@ -712,7 +826,7 @@ export default function StudentInfo() {
     const usedByStudent = await valueUsedByAnotherStudent(
       "email",
       email,
-      editingId
+      editingId,
     );
     const usedByAccount = await valueUsedByUser("email", email);
     if (mySeq !== emailSeq.current) return true;
@@ -741,7 +855,7 @@ export default function StudentInfo() {
     const usedByStudent = await valueUsedByAnotherStudent(
       "phone",
       phone,
-      editingId
+      editingId,
     );
     const usedByAccount = await valueUsedByUser("phone", phone);
     if (mySeq !== phoneSeq.current) return true;
@@ -775,19 +889,19 @@ export default function StudentInfo() {
     setSubmitting(true);
 
     if (
-      !required(form.full_name) ||
+      !required(form.name_en) ||
       !required(form.roll_number) ||
       form.class_name === null ||
       form.section === null
     ) {
       setTouched((t) => ({
         ...t,
-        full_name: true,
+        name_en: true,
         roll_number: true,
         class_name: true,
         section: true,
       }));
-      toast.error("Please fill Name, Roll, Class and Section.");
+      toast.error("Please fill Name (English), Roll, Class and Section.");
       setSubmitting(false);
       return;
     }
@@ -804,16 +918,66 @@ export default function StudentInfo() {
 
     try {
       const fd = new FormData();
-      fd.append("full_name", form.full_name);
+      // Student basic info
+      fd.append("name_en", form.name_en);
+      if (form.name_bn) fd.append("name_bn", form.name_bn);
+
       fd.append("roll_number", String(form.roll_number));
       fd.append("class_name", String(Number(form.class_name)));
       fd.append("section", String(Number(form.section)));
+
       if (form.date_of_birth) fd.append("date_of_birth", form.date_of_birth);
-      if (form.address) fd.append("address", form.address);
+      if (form.religion) fd.append("religion", form.religion);
+
+      // Father info
+      if (form.father_name_en) fd.append("father_name_en", form.father_name_en);
+      if (form.father_name_bn) fd.append("father_name_bn", form.father_name_bn);
+      if (form.father_occupation)
+        fd.append("father_occupation", form.father_occupation);
+
+      // Mother info
+      if (form.mother_name_en) fd.append("mother_name_en", form.mother_name_en);
+      if (form.mother_name_bn) fd.append("mother_name_bn", form.mother_name_bn);
+      if (form.mother_occupation)
+        fd.append("mother_occupation", form.mother_occupation);
+
+      // Permanent address
+      if (form.permanent_village)
+        fd.append("permanent_village", form.permanent_village);
+      if (form.permanent_post) fd.append("permanent_post", form.permanent_post);
+      if (form.permanent_thana)
+        fd.append("permanent_thana", form.permanent_thana);
+      if (form.permanent_district)
+        fd.append("permanent_district", form.permanent_district);
+
+      // Present address
+      if (form.present_village)
+        fd.append("present_village", form.present_village);
+      if (form.present_post) fd.append("present_post", form.present_post);
+      if (form.present_thana) fd.append("present_thana", form.present_thana);
+      if (form.present_district)
+        fd.append("present_district", form.present_district);
+
+      // Guardian info
       if (form.guardian_name) fd.append("guardian_name", form.guardian_name);
+      if (form.guardian_relation)
+        fd.append("guardian_relation", form.guardian_relation);
+      if (form.guardian_occupation)
+        fd.append("guardian_occupation", form.guardian_occupation);
       if (form.guardian_phone) fd.append("guardian_phone", form.guardian_phone);
+
+      // Previous school
+      if (form.previous_school)
+        fd.append("previous_school", form.previous_school);
+      if (form.previous_class) fd.append("previous_class", form.previous_class);
+      if (form.tc_number) fd.append("tc_number", form.tc_number);
+      if (form.tc_date) fd.append("tc_date", form.tc_date);
+
+      // Contact
       if (form.contact_email) fd.append("contact_email", form.contact_email);
       if (form.contact_phone) fd.append("contact_phone", form.contact_phone);
+
+      // Photo
       if (form.photo) fd.append("photo", form.photo);
 
       let savedStudentId = editingId;
@@ -857,7 +1021,7 @@ export default function StudentInfo() {
 
           await axiosInstance.patch(
             `admin/users/${savedUserId}/`,
-            patchPayload
+            patchPayload,
           );
 
           // update username cache
@@ -918,7 +1082,7 @@ export default function StudentInfo() {
             });
 
             toast.success(
-              `Login created. Username: ${userForm.username}, Password: ${passwordToUse}`
+              `Login created. Username: ${userForm.username}, Password: ${passwordToUse}`,
             );
           }
         }
@@ -1006,9 +1170,8 @@ export default function StudentInfo() {
             isClearable
             placeholder="All years"
             value={
-              yearOptions.find(
-                (o) => Number(o.value) === Number(filterYear)
-              ) || null
+              yearOptions.find((o) => Number(o.value) === Number(filterYear)) ||
+              null
             }
             onChange={(opt) => {
               const y = opt ? Number(opt.value) : null;
@@ -1039,7 +1202,7 @@ export default function StudentInfo() {
             placeholder={filterYear ? "All classes (year)" : "All classes"}
             value={
               classOptions.find(
-                (o) => Number(o.value) === Number(filterClassId)
+                (o) => Number(o.value) === Number(filterClassId),
               ) || null
             }
             onChange={(opt) => {
@@ -1071,7 +1234,7 @@ export default function StudentInfo() {
             isDisabled={!filterClassId}
             value={
               filterSectionOptions.find(
-                (o) => Number(o.value) === Number(filterSectionId)
+                (o) => Number(o.value) === Number(filterSectionId),
               ) || null
             }
             onChange={(opt) => {
@@ -1140,13 +1303,10 @@ export default function StudentInfo() {
               ))
             ) : filtered.length === 0 ? (
               <tr>
-                <td
-                  colSpan={8}
-                  className="py-10 text-center text-slate-500"
-                >
+                <td colSpan={8} className="py-10 text-center text-slate-500">
                   No students found. Click{" "}
-                  <span className="font-medium">“Add Student”</span> to
-                  create one.
+                  <span className="font-medium">“Add Student”</span> to create
+                  one.
                 </td>
               </tr>
             ) : (
@@ -1168,13 +1328,16 @@ export default function StudentInfo() {
                     </td>
                     <td className="py-3 px-4">
                       <div className="flex items-center gap-3">
-                        <AvatarCircle name={s.full_name} src={s.photo} />
-                        <span className="font-medium">{s.full_name}</span>
+                        <AvatarCircle
+                          name={s.name_en || s.name_bn}
+                          src={s.photo}
+                        />
+                        <span className="font-medium">
+                          {s.name_en || s.name_bn || "-"}
+                        </span>
                       </div>
                     </td>
-                    <td className="py-3 px-4">
-                      {s.roll_number ?? "-"}
-                    </td>
+                    <td className="py-3 px-4">{s.roll_number ?? "-"}</td>
                     <td className="py-3 px-4">
                       <span className="inline-flex items-center rounded-lg border px-2 py-0.5 text-xs font-medium">
                         {s.class_name_label ||
@@ -1184,17 +1347,11 @@ export default function StudentInfo() {
                     </td>
                     <td className="py-3 px-4">
                       <span className="inline-flex items-center rounded-lg border px-2 py-0.5 text-xs font-medium">
-                        {s.section_label ||
-                          sectionNameById[s.section] ||
-                          "-"}
+                        {s.section_label || sectionNameById[s.section] || "-"}
                       </span>
                     </td>
-                    <td className="py-3 px-4">
-                      {username || "-"}
-                    </td>
-                    <td className="py-3 px-4">
-                      {password || "-"}
-                    </td>
+                    <td className="py-3 px-4">{username || "-"}</td>
+                    <td className="py-3 px-4">{password || "-"}</td>
                     <td className="py-3 px-4">
                       <div className="flex items-center justify-center gap-2">
                         <button
@@ -1229,23 +1386,19 @@ export default function StudentInfo() {
           >
             Previous
           </button>
-          {Array.from({ length: totalPages }, (_, i) => i + 1).map(
-            (p) => (
-              <button
-                key={p}
-                onClick={() => setPage(p)}
-                className={`px-3 py-1.5 border rounded-lg ${
-                  page === p ? "bg-blue-600 text-white" : ""
-                }`}
-              >
-                {p}
-              </button>
-            )
-          )}
+          {Array.from({ length: totalPages }, (_, i) => i + 1).map((p) => (
+            <button
+              key={p}
+              onClick={() => setPage(p)}
+              className={`px-3 py-1.5 border rounded-lg ${
+                page === p ? "bg-blue-600 text-white" : ""
+              }`}
+            >
+              {p}
+            </button>
+          ))}
           <button
-            onClick={() =>
-              setPage((p) => Math.min(totalPages, p + 1))
-            }
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
             disabled={page === totalPages}
             className="px-3 py-1.5 border rounded-lg disabled:opacity-50"
           >
@@ -1276,53 +1429,65 @@ export default function StudentInfo() {
                 className="grid grid-cols-1 md:grid-cols-2 gap-3"
               >
                 {/* Full name */}
-                <div className="md:col-span-2">
-                  <label className="block text-xs font-medium text-slate-600 mb-1">
-                    Full Name <span className="text-red-600">*</span>
-                  </label>
-                  <input
-                    name="full_name"
-                    value={form.full_name}
-                    onChange={onChangeField}
-                    onBlur={() => onBlur("full_name")}
-                    className={`w-full border p-2 rounded-lg focus:ring-2 ${
-                      touched.full_name && !required(form.full_name)
-                        ? "border-red-500 focus:ring-red-200"
-                        : "border-slate-300 focus:border-blue-500 focus:ring-blue-200"
-                    }`}
-                    placeholder="e.g., Afsana Rahman"
-                  />
-                  {touched.full_name && !required(form.full_name) && (
-                    <p className="text-xs text-red-600 mt-1">
-                      Name is required.
-                    </p>
-                  )}
-                </div>
+                  <div>
+    <label className="block text-xs font-medium text-slate-600 mb-1">
+      Name (English) <span className="text-red-600">*</span>
+    </label>
+    <input
+      name="name_en"
+      value={form.name_en}
+      onChange={onChangeField}
+      onBlur={() => onBlur("name_en")}
+      className={`w-full border p-2 rounded-lg focus:ring-2 ${
+        touched.name_en && !required(form.name_en)
+          ? "border-red-500 focus:ring-red-200"
+          : "border-slate-300 focus:border-blue-500 focus:ring-blue-200"
+      }`}
+      placeholder="e.g., Afsana Rahman"
+    />
+    {touched.name_en && !required(form.name_en) && (
+      <p className="text-xs text-red-600 mt-1">
+        Name is required.
+      </p>
+    )}
+  </div>
 
-                {/* Roll */}
-                <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1">
-                    Roll Number <span className="text-red-600">*</span>
-                  </label>
-                  <input
-                    name="roll_number"
-                    value={form.roll_number}
-                    onChange={onChangeField}
-                    onBlur={() => onBlur("roll_number")}
-                    className={`w-full border p-2 rounded-lg focus:ring-2 ${
-                      touched.roll_number && !required(form.roll_number)
-                        ? "border-red-500 focus:ring-red-200"
-                        : "border-slate-300 focus:border-blue-500 focus:ring-blue-200"
-                    }`}
-                    placeholder="e.g., 23"
-                  />
-                  {touched.roll_number &&
-                    !required(form.roll_number) && (
-                      <p className="text-xs text-red-600 mt-1">
-                        Roll number is required.
-                      </p>
-                    )}
-                </div>
+  <div>
+    <label className="block text-xs font-medium text-slate-600 mb-1">
+      নাম (বাংলা)
+    </label>
+    <input
+      name="name_bn"
+      value={form.name_bn}
+      onChange={onChangeField}
+      className="w-full border border-slate-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 p-2 rounded-lg"
+      placeholder="আফসানা রহমান"
+    />
+  </div>
+
+  {/* ================= ROLL ================= */}
+<div>
+    <label className="block text-xs font-medium text-slate-600 mb-1">
+      Roll Number <span className="text-red-600">*</span>
+    </label>
+    <input
+      name="roll_number"
+      value={form.roll_number}
+      onChange={onChangeField}
+      onBlur={() => onBlur("roll_number")}
+      className={`w-full border p-2 rounded-lg focus:ring-2 ${
+        touched.roll_number && !required(form.roll_number)
+          ? "border-red-500 focus:ring-red-200"
+          : "border-slate-300 focus:border-blue-500 focus:ring-blue-200"
+      }`}
+      placeholder="e.g., 23"
+    />
+    {touched.roll_number && !required(form.roll_number) && (
+      <p className="text-xs text-red-600 mt-1">
+        Roll number is required.
+      </p>
+    )}
+  </div>
 
                 {/* Year (modal cascade) */}
                 <div>
@@ -1333,7 +1498,7 @@ export default function StudentInfo() {
                     options={yearOptions}
                     value={
                       yearOptions.find(
-                        (o) => Number(o.value) === Number(formYear)
+                        (o) => Number(o.value) === Number(formYear),
                       ) || null
                     }
                     onChange={(opt) => {
@@ -1376,7 +1541,7 @@ export default function StudentInfo() {
                     options={classOptionsForForm}
                     value={
                       classOptionsForForm.find(
-                        (o) => Number(o.value) === Number(form.class_name)
+                        (o) => Number(o.value) === Number(form.class_name),
                       ) || null
                     }
                     onChange={(opt) => {
@@ -1392,9 +1557,7 @@ export default function StudentInfo() {
                       }));
                     }}
                     onBlur={() => onBlur("class_name")}
-                    placeholder={
-                      formYear ? "Select class" : "Pick year first"
-                    }
+                    placeholder={formYear ? "Select class" : "Pick year first"}
                     isDisabled={!formYear}
                     classNamePrefix="rs"
                     menuPortalTarget={menuPortalTarget}
@@ -1431,7 +1594,7 @@ export default function StudentInfo() {
                     options={sectionOptionsForForm}
                     value={
                       sectionOptionsForForm.find(
-                        (o) => Number(o.value) === Number(form.section)
+                        (o) => Number(o.value) === Number(form.section),
                       ) || null
                     }
                     onChange={(opt) => {
@@ -1443,9 +1606,7 @@ export default function StudentInfo() {
                     }}
                     onBlur={() => onBlur("section")}
                     placeholder={
-                      form.class_name
-                        ? "Select section"
-                        : "Pick class first"
+                      form.class_name ? "Select section" : "Pick class first"
                     }
                     isDisabled={!form.class_name}
                     isClearable={false}
@@ -1534,8 +1695,8 @@ export default function StudentInfo() {
                         (emailState.status === "ok"
                           ? "text-emerald-600"
                           : emailState.status === "taken"
-                          ? "text-rose-600"
-                          : "text-slate-500")
+                            ? "text-rose-600"
+                            : "text-slate-500")
                       }
                     >
                       {emailState.message}
@@ -1561,8 +1722,8 @@ export default function StudentInfo() {
                         (phoneState.status === "ok"
                           ? "text-emerald-600"
                           : phoneState.status === "taken"
-                          ? "text-rose-600"
-                          : "text-slate-500")
+                            ? "text-rose-600"
+                            : "text-slate-500")
                       }
                     >
                       {phoneState.message}
@@ -1665,22 +1826,14 @@ export default function StudentInfo() {
                       />
                       <div className="mt-1 flex items-center gap-2 text-xs">
                         {checkingUsername && (
-                          <span className="text-slate-500">
-                            Checking…
-                          </span>
+                          <span className="text-slate-500">Checking…</span>
                         )}
-                        {usernameAvailable === true &&
-                          !checkingUsername && (
-                            <span className="text-green-600">
-                              ✅ Available
-                            </span>
-                          )}
-                        {usernameAvailable === false &&
-                          !checkingUsername && (
-                            <span className="text-red-600">
-                              ❌ Taken
-                            </span>
-                          )}
+                        {usernameAvailable === true && !checkingUsername && (
+                          <span className="text-green-600">✅ Available</span>
+                        )}
+                        {usernameAvailable === false && !checkingUsername && (
+                          <span className="text-red-600">❌ Taken</span>
+                        )}
                         {usernameNote && (
                           <span className="text-slate-600">
                             • {usernameNote}
@@ -1749,9 +1902,7 @@ export default function StudentInfo() {
                         />
                         <button
                           type="button"
-                          onClick={() =>
-                            setShowPassword((prev) => !prev)
-                          }
+                          onClick={() => setShowPassword((prev) => !prev)}
                           className="absolute inset-y-0 right-0 px-3 flex items-center text-slate-500"
                         >
                           {showPassword ? "🙈" : "👁️"}
@@ -1808,11 +1959,7 @@ export default function StudentInfo() {
                       : ""
                   }
                 >
-                  {submitting
-                    ? "Saving..."
-                    : editingId
-                    ? "Update"
-                    : "Save"}
+                  {submitting ? "Saving..." : editingId ? "Update" : "Save"}
                 </button>
               </form>
             </div>

@@ -1,6 +1,6 @@
 // client/src/pages/DashboardPages/Master/AddSection.jsx
 import { useEffect, useState, useMemo } from "react";
-import AxiosInstance from "../../../components/AxiosInstance";
+import AxiosInstance from "../../../components/axiosInstance";
 
 export default function AddSection() {
   const [name, setName] = useState("");
