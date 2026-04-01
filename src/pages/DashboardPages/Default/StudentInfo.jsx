@@ -266,7 +266,7 @@ export default function StudentInfo() {
 
   const classOptionsForForm = useMemo(() => {
     const list = formYear
-      ? allClasses.filter((c) => Number(c.year) === Number(formYear))
+      ? allClasses.filter((c) => Number(c.year_label) === Number(formYear))
       : [];
     return list.map((c) => ({ value: c.id, label: c.name }));
   }, [allClasses, formYear]);
@@ -316,12 +316,12 @@ export default function StudentInfo() {
           : classesRes.data?.results || [];
         setAllClasses(cls);
 
-        const setY = new Set();
-        for (const c of cls) {
-          if (c?.year !== undefined && c?.year !== null && c?.year !== "") {
-            setY.add(Number(c.year));
-          }
-        }
+const setY = new Set();
+for (const c of cls) {
+  if (c?.year_label) {
+    setY.add(Number(c.year_label));
+  }
+}
         setYears(Array.from(setY).sort((a, b) => b - a));
       } catch (e) {
         console.error(e);
@@ -775,44 +775,61 @@ export default function StudentInfo() {
   }, [userForm.username, createLogin, userEditedUsername]);
 
   /* ---------- Uniqueness checks for email/phone ---------- */
-  const valueUsedByAnotherStudent = async (field, value, excludeId) => {
-    if (!value) return false;
-    try {
-      const params =
-        field === "email" ? { contact_email: value } : { contact_phone: value };
-      const res = await axiosInstance.get("students/", { params });
-      if (Array.isArray(res.data)) {
-        return res.data.some((s) => {
-          if (excludeId && String(s.id) === String(excludeId)) return false;
-          return field === "email"
-            ? (s.contact_email || "").toLowerCase() === value.toLowerCase()
-            : (s.contact_phone || "").trim() === value.trim();
-        });
-      }
-    } catch {
-      return false;
-    }
-    return false;
-  };
+const valueUsedByAnotherStudent = async (field, value, excludeId) => {
+  if (!value) return false;
 
-  const valueUsedByUser = async (field, value) => {
-    if (!value) return false;
-    try {
-      const params = field === "email" ? { email: value } : { phone: value };
-      const res = await axiosInstance.get("admin/users/", { params });
-      if (Array.isArray(res.data)) {
-        return res.data.some((u) =>
-          field === "email"
-            ? (u.email || "").toLowerCase() === value.toLowerCase()
-            : (u.phone || "").trim() === value.trim(),
-        );
-      }
-    } catch {
-      return false;
-    }
-    return false;
-  };
+  try {
+    const params =
+      field === "email"
+        ? { contact_email: value }
+        : { contact_phone: value };
 
+    const res = await axiosInstance.get("students/", { params });
+
+    const list = Array.isArray(res.data)
+      ? res.data
+      : res.data?.results || [];
+
+    return list.some((s) => {
+      // ✅ VERY IMPORTANT: ignore current editing student
+      if (excludeId && String(s.id) === String(excludeId)) return false;
+
+      return field === "email"
+        ? (s.contact_email || "").toLowerCase() === value.toLowerCase()
+        : (s.contact_phone || "").trim() === value.trim();
+    });
+  } catch (err) {
+    console.error("Student duplicate check failed", err);
+    return false;
+  }
+};
+
+const valueUsedByUser = async (field, value) => {
+  if (!value) return false;
+
+  try {
+    const params =
+      field === "email" ? { email: value } : { phone: value };
+
+    const res = await axiosInstance.get("admin/users/", { params });
+
+    const list = Array.isArray(res.data)
+      ? res.data
+      : res.data?.results || [];
+
+    return list.some((u) => {
+      // ✅ VERY IMPORTANT: ignore current linked user
+      if (form.user && String(u.id) === String(form.user)) return false;
+
+      return field === "email"
+        ? (u.email || "").toLowerCase() === value.toLowerCase()
+        : (u.phone || "").trim() === value.trim();
+    });
+  } catch (err) {
+    console.error("User duplicate check failed", err);
+    return false;
+  }
+};
   const checkEmailUnique = async () => {
     const email = (form.contact_email || "").trim();
     const mySeq = ++emailSeq.current;
@@ -917,68 +934,63 @@ export default function StudentInfo() {
     }
 
     try {
-      const fd = new FormData();
-      // Student basic info
-      fd.append("name_en", form.name_en);
-      if (form.name_bn) fd.append("name_bn", form.name_bn);
+const fd = new FormData();
 
-      fd.append("roll_number", String(form.roll_number));
-      fd.append("class_name", String(Number(form.class_name)));
-      fd.append("section", String(Number(form.section)));
+// Names
+fd.append("name_en", form.name_en);
+if (form.name_bn) fd.append("name_bn", form.name_bn);
 
-      if (form.date_of_birth) fd.append("date_of_birth", form.date_of_birth);
-      if (form.religion) fd.append("religion", form.religion);
+// Academic
+fd.append("roll_number", String(form.roll_number));
+fd.append("class_name", String(Number(form.class_name)));
+fd.append("section", String(Number(form.section)));
 
-      // Father info
-      if (form.father_name_en) fd.append("father_name_en", form.father_name_en);
-      if (form.father_name_bn) fd.append("father_name_bn", form.father_name_bn);
-      if (form.father_occupation)
-        fd.append("father_occupation", form.father_occupation);
+// Personal
+if (form.date_of_birth) fd.append("date_of_birth", form.date_of_birth);
+if (form.religion) fd.append("religion", form.religion);
 
-      // Mother info
-      if (form.mother_name_en) fd.append("mother_name_en", form.mother_name_en);
-      if (form.mother_name_bn) fd.append("mother_name_bn", form.mother_name_bn);
-      if (form.mother_occupation)
-        fd.append("mother_occupation", form.mother_occupation);
+// Father
+if (form.father_name_en) fd.append("father_name_en", form.father_name_en);
+if (form.father_name_bn) fd.append("father_name_bn", form.father_name_bn);
+if (form.father_occupation)
+  fd.append("father_occupation", form.father_occupation);
 
-      // Permanent address
-      if (form.permanent_village)
-        fd.append("permanent_village", form.permanent_village);
-      if (form.permanent_post) fd.append("permanent_post", form.permanent_post);
-      if (form.permanent_thana)
-        fd.append("permanent_thana", form.permanent_thana);
-      if (form.permanent_district)
-        fd.append("permanent_district", form.permanent_district);
+// Mother
+if (form.mother_name_en) fd.append("mother_name_en", form.mother_name_en);
+if (form.mother_name_bn) fd.append("mother_name_bn", form.mother_name_bn);
+if (form.mother_occupation)
+  fd.append("mother_occupation", form.mother_occupation);
 
-      // Present address
-      if (form.present_village)
-        fd.append("present_village", form.present_village);
-      if (form.present_post) fd.append("present_post", form.present_post);
-      if (form.present_thana) fd.append("present_thana", form.present_thana);
-      if (form.present_district)
-        fd.append("present_district", form.present_district);
+// Permanent address
+if (form.permanent_village) fd.append("permanent_village", form.permanent_village);
+if (form.permanent_post) fd.append("permanent_post", form.permanent_post);
+if (form.permanent_thana) fd.append("permanent_thana", form.permanent_thana);
+if (form.permanent_district) fd.append("permanent_district", form.permanent_district);
 
-      // Guardian info
-      if (form.guardian_name) fd.append("guardian_name", form.guardian_name);
-      if (form.guardian_relation)
-        fd.append("guardian_relation", form.guardian_relation);
-      if (form.guardian_occupation)
-        fd.append("guardian_occupation", form.guardian_occupation);
-      if (form.guardian_phone) fd.append("guardian_phone", form.guardian_phone);
+// Present address
+if (form.present_village) fd.append("present_village", form.present_village);
+if (form.present_post) fd.append("present_post", form.present_post);
+if (form.present_thana) fd.append("present_thana", form.present_thana);
+if (form.present_district) fd.append("present_district", form.present_district);
 
-      // Previous school
-      if (form.previous_school)
-        fd.append("previous_school", form.previous_school);
-      if (form.previous_class) fd.append("previous_class", form.previous_class);
-      if (form.tc_number) fd.append("tc_number", form.tc_number);
-      if (form.tc_date) fd.append("tc_date", form.tc_date);
+// Guardian
+if (form.guardian_name) fd.append("guardian_name", form.guardian_name);
+if (form.guardian_relation) fd.append("guardian_relation", form.guardian_relation);
+if (form.guardian_occupation) fd.append("guardian_occupation", form.guardian_occupation);
+if (form.guardian_phone) fd.append("guardian_phone", form.guardian_phone);
 
-      // Contact
-      if (form.contact_email) fd.append("contact_email", form.contact_email);
-      if (form.contact_phone) fd.append("contact_phone", form.contact_phone);
+// Previous school
+if (form.previous_school) fd.append("previous_school", form.previous_school);
+if (form.previous_class) fd.append("previous_class", form.previous_class);
+if (form.tc_number) fd.append("tc_number", form.tc_number);
+if (form.tc_date) fd.append("tc_date", form.tc_date);
 
-      // Photo
-      if (form.photo) fd.append("photo", form.photo);
+// Contact
+if (form.contact_email) fd.append("contact_email", form.contact_email);
+if (form.contact_phone) fd.append("contact_phone", form.contact_phone);
+
+// Photo
+if (form.photo) fd.append("photo", form.photo);
 
       let savedStudentId = editingId;
       let savedUserId = form.user;
@@ -1650,31 +1662,152 @@ export default function StudentInfo() {
                   />
                 </div>
 
-                {/* Guardian / Contacts */}
-                <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1">
-                    Guardian Name
-                  </label>
-                  <input
-                    name="guardian_name"
-                    value={form.guardian_name}
-                    onChange={onChangeField}
-                    className="w-full border border-slate-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 p-2 rounded-lg"
-                    placeholder="e.g., Md. Karim"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1">
-                    Guardian Phone
-                  </label>
-                  <input
-                    name="guardian_phone"
-                    value={form.guardian_phone}
-                    onChange={onChangeField}
-                    className="w-full border border-slate-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 p-2 rounded-lg"
-                    placeholder="01XXXXXXXXX"
-                  />
-                </div>
+                  <div>
+  <input name="religion" value={form.religion} onChange={onChangeField}
+    placeholder="Religion"
+    className="w-full border p-2 rounded-lg" />
+</div>
+
+                {/* Father Info */}
+<div className="md:col-span-2 mt-2">
+  <h3 className="text-sm font-semibold text-slate-700">Father Information</h3>
+</div>
+
+<div>
+  <input name="father_name_en" value={form.father_name_en} onChange={onChangeField}
+    placeholder="Father Name (English)"
+    className="w-full border p-2 rounded-lg" />
+</div>
+
+<div>
+  <input name="father_name_bn" value={form.father_name_bn} onChange={onChangeField}
+    placeholder="পিতার নাম"
+    className="w-full border p-2 rounded-lg" />
+</div>
+
+<div className="md:col-span-2">
+  <input name="father_occupation" value={form.father_occupation} onChange={onChangeField}
+    placeholder="Father Occupation"
+    className="w-full border p-2 rounded-lg" />
+</div>
+
+{/* Mother Info */}
+<div className="md:col-span-2 mt-2">
+  <h3 className="text-sm font-semibold text-slate-700">Mother Information</h3>
+</div>
+
+<div>
+  <input name="mother_name_en" value={form.mother_name_en} onChange={onChangeField}
+    placeholder="Mother Name (English)"
+    className="w-full border p-2 rounded-lg" />
+</div>
+
+<div>
+  <input name="mother_name_bn" value={form.mother_name_bn} onChange={onChangeField}
+    placeholder="মাতার নাম"
+    className="w-full border p-2 rounded-lg" />
+</div>
+
+<div className="md:col-span-2">
+  <input name="mother_occupation" value={form.mother_occupation} onChange={onChangeField}
+    placeholder="Mother Occupation"
+    className="w-full border p-2 rounded-lg" />
+</div>
+
+
+
+{/* Permanent Address */}
+<div className="md:col-span-2 mt-2">
+  <h3 className="text-sm font-semibold text-slate-700">Permanent Address</h3>
+</div>
+
+<div><input name="permanent_village" value={form.permanent_village} onChange={onChangeField} placeholder="Village" className="w-full border p-2 rounded-lg" /></div>
+<div><input name="permanent_post" value={form.permanent_post} onChange={onChangeField} placeholder="Post Office" className="w-full border p-2 rounded-lg" /></div>
+<div><input name="permanent_thana" value={form.permanent_thana} onChange={onChangeField} placeholder="Thana" className="w-full border p-2 rounded-lg" /></div>
+<div><input name="permanent_district" value={form.permanent_district} onChange={onChangeField} placeholder="District" className="w-full border p-2 rounded-lg" /></div>
+
+{/* Present Address */}
+<div className="md:col-span-2 mt-2">
+  <h3 className="text-sm font-semibold text-slate-700">Present Address</h3>
+</div>
+
+<div><input name="present_village" value={form.present_village} onChange={onChangeField} placeholder="Village" className="w-full border p-2 rounded-lg" /></div>
+<div><input name="present_post" value={form.present_post} onChange={onChangeField} placeholder="Post Office" className="w-full border p-2 rounded-lg" /></div>
+<div><input name="present_thana" value={form.present_thana} onChange={onChangeField} placeholder="Thana" className="w-full border p-2 rounded-lg" /></div>
+<div><input name="present_district" value={form.present_district} onChange={onChangeField} placeholder="District" className="w-full border p-2 rounded-lg" /></div>
+
+{/* ================= GUARDIAN ================= */}
+<div className="md:col-span-2 mt-2">
+  <h3 className="text-sm font-semibold text-slate-700">
+    Guardian Information
+  </h3>
+</div>
+
+{/* Guardian Name */}
+<div>
+  <label className="block text-xs font-medium text-slate-600 mb-1">
+    Guardian Name
+  </label>
+  <input
+    name="guardian_name"
+    value={form.guardian_name}
+    onChange={onChangeField}
+    className="w-full border border-slate-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 p-2 rounded-lg"
+    placeholder="e.g., Md. Karim"
+  />
+</div>
+
+{/* Guardian Relation */}
+<div>
+  <label className="block text-xs font-medium text-slate-600 mb-1">
+    Relation
+  </label>
+  <input
+    name="guardian_relation"
+    value={form.guardian_relation}
+    onChange={onChangeField}
+    className="w-full border border-slate-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 p-2 rounded-lg"
+    placeholder="e.g., Father / Uncle"
+  />
+</div>
+
+{/* Guardian Occupation */}
+<div>
+  <label className="block text-xs font-medium text-slate-600 mb-1">
+    Occupation
+  </label>
+  <input
+    name="guardian_occupation"
+    value={form.guardian_occupation}
+    onChange={onChangeField}
+    className="w-full border border-slate-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 p-2 rounded-lg"
+    placeholder="e.g., Businessman"
+  />
+</div>
+
+{/* Guardian Phone */}
+<div>
+  <label className="block text-xs font-medium text-slate-600 mb-1">
+    Guardian Phone
+  </label>
+  <input
+    name="guardian_phone"
+    value={form.guardian_phone}
+    onChange={onChangeField}
+    className="w-full border border-slate-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 p-2 rounded-lg"
+    placeholder="01XXXXXXXXX"
+  />
+</div>
+
+{/* Previous School */}
+<div className="md:col-span-2 mt-2">
+  <h3 className="text-sm font-semibold text-slate-700">Previous School</h3>
+</div>
+
+<div><input name="previous_school" value={form.previous_school} onChange={onChangeField} placeholder="School Name" className="w-full border p-2 rounded-lg" /></div>
+<div><input name="previous_class" value={form.previous_class} onChange={onChangeField} placeholder="Class" className="w-full border p-2 rounded-lg" /></div>
+<div><input name="tc_number" value={form.tc_number} onChange={onChangeField} placeholder="TC Number" className="w-full border p-2 rounded-lg" /></div>
+<div><input type="date" name="tc_date" value={form.tc_date} onChange={onChangeField} className="w-full border p-2 rounded-lg" /></div>
                 <div>
                   <label className="block text-xs font-medium text-slate-600 mb-1">
                     Email
