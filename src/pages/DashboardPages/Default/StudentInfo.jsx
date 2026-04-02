@@ -1663,6 +1663,9 @@ if (form.photo) fd.append("photo", form.photo);
                 </div>
 
                   <div>
+                                      <label className="block text-xs font-medium text-slate-600 mb-1">
+                    Religion
+                  </label>
   <input name="religion" value={form.religion} onChange={onChangeField}
     placeholder="Religion"
     className="w-full border p-2 rounded-lg" />
