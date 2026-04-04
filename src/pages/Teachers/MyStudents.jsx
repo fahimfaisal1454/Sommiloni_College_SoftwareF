@@ -204,7 +204,7 @@ export default function MyStudents() {
     const needle = q.toLowerCase();
 
     return rows.filter((s) => {
-      const name = (s.full_name || "").toLowerCase();
+      const name = (s.name_en || s.name_bn || "").toLowerCase();
       const roll = String(s.roll_number || "").toLowerCase();
       const cls = (s.class_name_label || "").toLowerCase();
       const sec = (s.section_label || "").toLowerCase();
@@ -300,7 +300,7 @@ export default function MyStudents() {
               className="grid grid-cols-6 gap-3 p-3 text-sm border-b last:border-b-0"
             >
               <div>{i + 1}</div>
-              <div>{s.full_name}</div>
+              <div>{s.name_en|| s.name_bn  || "-"}</div>
               <div>{s.roll_number ?? "-"}</div>
               <div>{s.class_name_label || s.class_name}</div>
               <div>{s.section_label || s.section || "-"}</div>
@@ -308,7 +308,7 @@ export default function MyStudents() {
                 {s.photo ? (
                   <img
                     src={s.photo}
-                    alt={s.full_name}
+                    alt={s.name_en || s.name_bn}
                     className="h-9 w-9 rounded-full object-cover border"
                   />
                 ) : (
